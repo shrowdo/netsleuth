@@ -1,4 +1,8 @@
 .claude/worktrees/
+dist/
+build/
+*.spec
+network_loop_finder.egg-info/
 __pycache__/
 *.pyc
 *.pyo
