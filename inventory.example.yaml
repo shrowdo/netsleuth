@@ -1,0 +1,13 @@
+seed: 192.168.1.1
+username: admin
+password: secret
+device_type: cisco_ios   # or cisco_nxos, juniper_junos, arista_eos, etc.
+
+# Optional: override SSH port (default 22)
+# port: 22
+
+# Optional: use SSH key instead of password
+# key_file: ~/.ssh/id_rsa
+
+# Optional: limit discovery depth (default: unlimited)
+# max_depth: 5
