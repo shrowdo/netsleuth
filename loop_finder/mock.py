@@ -55,6 +55,7 @@ Example
 
 import yaml
 from rich.console import Console
+from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from loop_finder.discovery import Device, Neighbor
 
@@ -85,32 +86,40 @@ def discover_mock(topology_path: str) -> dict[str, Device]:
     raw_devices: dict = data["devices"]
     devices: dict[str, Device] = {}
 
-    for hostname, attrs in raw_devices.items():
-        ip = attrs.get("ip", "")
-        console.print(f"[cyan]Connecting to {hostname} ({ip}) (mock)...[/cyan]")
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("{task.description}"),
+        console=console,
+        transient=False,
+    ) as progress:
+        task = progress.add_task("Starting mock discovery...", total=None)
 
-        raw_neighbors = attrs.get("neighbors", [])
-        neighbors: list[Neighbor] = []
-        for n in raw_neighbors:
-            neighbor_hostname = n.get("hostname", "")
-            if not neighbor_hostname:
-                raise ValueError(
-                    f"Neighbour entry under '{hostname}' is missing a 'hostname' field."
+        for hostname, attrs in raw_devices.items():
+            ip = attrs.get("ip", "")
+            progress.update(task, description=f"Loading {hostname} (mock)...")
+
+            raw_neighbors = attrs.get("neighbors", [])
+            neighbors: list[Neighbor] = []
+            for n in raw_neighbors:
+                neighbor_hostname = n.get("hostname", "")
+                if not neighbor_hostname:
+                    raise ValueError(
+                        f"Neighbour entry under '{hostname}' is missing a 'hostname' field."
+                    )
+                neighbors.append(
+                    Neighbor(
+                        hostname=neighbor_hostname,
+                        local_port=n.get("local_port", ""),
+                        remote_port=n.get("remote_port", ""),
+                        ip=n.get("ip", ""),
+                    )
                 )
-            neighbors.append(
-                Neighbor(
-                    hostname=neighbor_hostname,
-                    local_port=n.get("local_port", ""),
-                    remote_port=n.get("remote_port", ""),
-                    ip=n.get("ip", ""),
-                )
+
+            device = Device(hostname=hostname, ip=ip, neighbors=neighbors)
+            devices[hostname] = device
+            progress.console.print(
+                f"[green]  Loaded: {hostname} — {len(neighbors)} neighbour(s)[/green]"
             )
-
-        device = Device(hostname=hostname, ip=ip, neighbors=neighbors)
-        devices[hostname] = device
-        console.print(
-            f"[green]  Loaded: {hostname} — {len(neighbors)} neighbour(s)[/green]"
-        )
 
     console.print(
         f"[bold green]Mock discovery complete: {len(devices)} device(s) loaded.[/bold green]"

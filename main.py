@@ -22,8 +22,16 @@ from rich.console import Console
 
 from loop_finder.discovery import discover
 from loop_finder.mock import discover_mock
-from loop_finder.graph import build_graph, find_loops
-from loop_finder.cli import print_topology, print_loops, print_summary
+from loop_finder.graph import build_graph, find_loops, get_loop_edges, suggest_remediation
+from loop_finder.cli import (
+    print_topology,
+    print_topology_diagram,
+    print_loops,
+    print_remediation,
+    print_summary,
+    print_stp_status,
+)
+from loop_finder.stp import get_stp_status, get_stp_status_mock, check_loops_stp_status
 
 console = Console()
 
@@ -74,6 +82,7 @@ def main():
 
     console.print("\n[bold]Phase 1: Discovery[/bold]")
 
+    creds = {}
     if args.mock:
         console.print(f"[yellow]Mock mode: loading topology from {args.mock}[/yellow]")
         devices = discover_mock(args.mock)
@@ -101,8 +110,26 @@ def main():
 
     console.print()
     print_topology(G)
+    print_topology_diagram(G, loops)
     console.print()
     print_loops(G, loops)
+
+    if loops:
+        # Build per-loop edge lists once; reused by remediation and STP checks.
+        all_loop_edges = [get_loop_edges(G, cycle) for cycle in loops]
+
+        suggestions = suggest_remediation(G, loops)
+        print_remediation(suggestions)
+
+        console.print("\n[bold]Phase 3: STP Status[/bold]")
+        if args.mock:
+            stp_data = get_stp_status_mock(devices)
+        else:
+            stp_data = get_stp_status(devices, creds)
+
+        stp_results = check_loops_stp_status(loops, all_loop_edges, stp_data)
+        print_stp_status(stp_results)
+
     print_summary(len(devices), len(loops))
 
     if args.json:

@@ -6,6 +6,7 @@ import re
 from dataclasses import dataclass, field
 from netmiko import ConnectHandler, NetmikoTimeoutException, NetmikoAuthenticationException
 from rich.console import Console
+from rich.progress import Progress, SpinnerColumn, TextColumn
 
 console = Console()
 
@@ -95,49 +96,58 @@ def discover(seed_ip: str, creds: dict, max_depth: int = None) -> dict[str, Devi
     devices: dict[str, Device] = {}
     queue = [(seed_ip, 0)]
 
-    while queue:
-        ip, depth = queue.pop(0)
-        if ip in visited_ips:
-            continue
-        if max_depth is not None and depth > max_depth:
-            continue
-        visited_ips.add(ip)
+    with Progress(
+        SpinnerColumn(),
+        TextColumn("{task.description}"),
+        console=console,
+        transient=False,
+    ) as progress:
+        task = progress.add_task("Starting discovery...", total=None)
 
-        try:
-            console.print(f"[cyan]Connecting to {ip}...[/cyan]")
-            conn = connect(
-                ip=ip,
-                username=creds["username"],
-                password=creds["password"],
-                device_type=creds["device_type"],
-                port=creds.get("port", 22),
-                key_file=creds.get("key_file"),
-            )
-            hostname = get_hostname(conn)
-            console.print(f"[green]  Connected: {hostname}[/green]")
+        while queue:
+            ip, depth = queue.pop(0)
+            if ip in visited_ips:
+                continue
+            if max_depth is not None and depth > max_depth:
+                continue
+            visited_ips.add(ip)
 
-            # Try CDP first, fall back to LLDP
+            progress.update(task, description=f"Connecting to {ip}...")
+
             try:
-                neighbors = get_cdp_neighbors(conn)
-                if not neighbors:
+                conn = connect(
+                    ip=ip,
+                    username=creds["username"],
+                    password=creds["password"],
+                    device_type=creds["device_type"],
+                    port=creds.get("port", 22),
+                    key_file=creds.get("key_file"),
+                )
+                hostname = get_hostname(conn)
+                progress.console.print(f"[green]  Connected: {hostname}[/green]")
+
+                # Try CDP first, fall back to LLDP
+                try:
+                    neighbors = get_cdp_neighbors(conn)
+                    if not neighbors:
+                        neighbors = get_lldp_neighbors(conn)
+                except Exception:
                     neighbors = get_lldp_neighbors(conn)
-            except Exception:
-                neighbors = get_lldp_neighbors(conn)
 
-            conn.disconnect()
+                conn.disconnect()
 
-            device = Device(hostname=hostname, ip=ip, neighbors=neighbors)
-            devices[hostname] = device
+                device = Device(hostname=hostname, ip=ip, neighbors=neighbors)
+                devices[hostname] = device
 
-            for neighbor in neighbors:
-                if neighbor.ip and neighbor.ip not in visited_ips:
-                    queue.append((neighbor.ip, depth + 1))
+                for neighbor in neighbors:
+                    if neighbor.ip and neighbor.ip not in visited_ips:
+                        queue.append((neighbor.ip, depth + 1))
 
-        except NetmikoAuthenticationException:
-            console.print(f"[red]  Auth failed for {ip}[/red]")
-        except NetmikoTimeoutException:
-            console.print(f"[yellow]  Timeout connecting to {ip}[/yellow]")
-        except Exception as e:
-            console.print(f"[red]  Error on {ip}: {e}[/red]")
+            except NetmikoAuthenticationException:
+                progress.console.print(f"[red]  Auth failed for {ip}[/red]")
+            except NetmikoTimeoutException:
+                progress.console.print(f"[yellow]  Timeout connecting to {ip}[/yellow]")
+            except Exception as e:
+                progress.console.print(f"[red]  Error on {ip}: {e}[/red]")
 
     return devices
