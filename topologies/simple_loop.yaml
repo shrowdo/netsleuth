@@ -1,0 +1,45 @@
+# simple_loop.yaml — Three switches forming a triangle loop.
+#
+# SW1, SW2, and SW3 are each connected to both of the other two switches,
+# creating a single loop: SW1 -> SW2 -> SW3 -> SW1.
+#
+#   SW1
+#  /   \
+# SW2—SW3
+
+devices:
+  SW1:
+    ip: 192.168.1.1
+    neighbors:
+      - hostname: SW2
+        local_port: GigabitEthernet0/1
+        remote_port: GigabitEthernet0/1
+        ip: 192.168.1.2
+      - hostname: SW3
+        local_port: GigabitEthernet0/2
+        remote_port: GigabitEthernet0/2
+        ip: 192.168.1.3
+
+  SW2:
+    ip: 192.168.1.2
+    neighbors:
+      - hostname: SW1
+        local_port: GigabitEthernet0/1
+        remote_port: GigabitEthernet0/1
+        ip: 192.168.1.1
+      - hostname: SW3
+        local_port: GigabitEthernet0/2
+        remote_port: GigabitEthernet0/1
+        ip: 192.168.1.3
+
+  SW3:
+    ip: 192.168.1.3
+    neighbors:
+      - hostname: SW2
+        local_port: GigabitEthernet0/1
+        remote_port: GigabitEthernet0/2
+        ip: 192.168.1.2
+      - hostname: SW1
+        local_port: GigabitEthernet0/2
+        remote_port: GigabitEthernet0/2
+        ip: 192.168.1.1

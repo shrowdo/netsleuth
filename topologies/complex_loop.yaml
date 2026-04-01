@@ -1,0 +1,80 @@
+# complex_loop.yaml — Five switches with two overlapping loops.
+#
+# Loop 1: SW1 — SW2 — SW3 — SW1  (triangle)
+# Loop 2: SW2 — SW4 — SW5 — SW2  (triangle sharing SW2)
+#
+# SW3—SW1
+#  \  /
+#  SW2
+#  / \
+# SW4 SW5
+#  \_/
+
+devices:
+  SW1:
+    ip: 192.168.1.1
+    neighbors:
+      - hostname: SW2
+        local_port: GigabitEthernet0/1
+        remote_port: GigabitEthernet0/1
+        ip: 192.168.1.2
+      - hostname: SW3
+        local_port: GigabitEthernet0/2
+        remote_port: GigabitEthernet0/2
+        ip: 192.168.1.3
+
+  SW2:
+    ip: 192.168.1.2
+    neighbors:
+      - hostname: SW1
+        local_port: GigabitEthernet0/1
+        remote_port: GigabitEthernet0/1
+        ip: 192.168.1.1
+      - hostname: SW3
+        local_port: GigabitEthernet0/2
+        remote_port: GigabitEthernet0/1
+        ip: 192.168.1.3
+      - hostname: SW4
+        local_port: GigabitEthernet0/3
+        remote_port: GigabitEthernet0/1
+        ip: 192.168.1.4
+      - hostname: SW5
+        local_port: GigabitEthernet0/4
+        remote_port: GigabitEthernet0/2
+        ip: 192.168.1.5
+
+  SW3:
+    ip: 192.168.1.3
+    neighbors:
+      - hostname: SW2
+        local_port: GigabitEthernet0/1
+        remote_port: GigabitEthernet0/2
+        ip: 192.168.1.2
+      - hostname: SW1
+        local_port: GigabitEthernet0/2
+        remote_port: GigabitEthernet0/2
+        ip: 192.168.1.1
+
+  SW4:
+    ip: 192.168.1.4
+    neighbors:
+      - hostname: SW2
+        local_port: GigabitEthernet0/1
+        remote_port: GigabitEthernet0/3
+        ip: 192.168.1.2
+      - hostname: SW5
+        local_port: GigabitEthernet0/2
+        remote_port: GigabitEthernet0/1
+        ip: 192.168.1.5
+
+  SW5:
+    ip: 192.168.1.5
+    neighbors:
+      - hostname: SW4
+        local_port: GigabitEthernet0/1
+        remote_port: GigabitEthernet0/2
+        ip: 192.168.1.4
+      - hostname: SW2
+        local_port: GigabitEthernet0/2
+        remote_port: GigabitEthernet0/4
+        ip: 192.168.1.2

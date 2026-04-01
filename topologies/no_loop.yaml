@@ -1,0 +1,49 @@
+# no_loop.yaml — Simple star/tree topology with no loops.
+#
+# SW1 is the core switch. SW2, SW3, and SW4 are access switches that each
+# connect only to SW1. There are no redundant paths, so no loops exist.
+#
+#        SW1 (core)
+#       / | \
+#     SW2 SW3 SW4
+
+devices:
+  SW1:
+    ip: 192.168.1.1
+    neighbors:
+      - hostname: SW2
+        local_port: GigabitEthernet0/1
+        remote_port: GigabitEthernet0/1
+        ip: 192.168.1.2
+      - hostname: SW3
+        local_port: GigabitEthernet0/2
+        remote_port: GigabitEthernet0/1
+        ip: 192.168.1.3
+      - hostname: SW4
+        local_port: GigabitEthernet0/3
+        remote_port: GigabitEthernet0/1
+        ip: 192.168.1.4
+
+  SW2:
+    ip: 192.168.1.2
+    neighbors:
+      - hostname: SW1
+        local_port: GigabitEthernet0/1
+        remote_port: GigabitEthernet0/1
+        ip: 192.168.1.1
+
+  SW3:
+    ip: 192.168.1.3
+    neighbors:
+      - hostname: SW1
+        local_port: GigabitEthernet0/1
+        remote_port: GigabitEthernet0/2
+        ip: 192.168.1.1
+
+  SW4:
+    ip: 192.168.1.4
+    neighbors:
+      - hostname: SW1
+        local_port: GigabitEthernet0/1
+        remote_port: GigabitEthernet0/3
+        ip: 192.168.1.1
