@@ -140,17 +140,24 @@ def print_remediation(suggestions: list[dict]):
 
     table = Table(box=box.ROUNDED)
     table.add_column("Loop #", style="bold red", justify="right")
-    table.add_column("Action", style="bold yellow")
+    table.add_column("Recommended Action", style="bold yellow")
     table.add_column("Device", style="cyan")
     table.add_column("Port", style="yellow")
+    table.add_column("STP Command", style="dim")
     table.add_column("Reason", style="white")
 
     for s in suggestions:
+        stp_cmd = (
+            f"int {s['port']}\n spanning-tree port-priority 240"
+            if s["port"] != "?"
+            else "N/A"
+        )
         table.add_row(
             str(s["loop"]),
-            "Disable port",
+            "Configure STP block",
             s["disable_on"],
             s["port"],
+            stp_cmd,
             s["reason"],
         )
 

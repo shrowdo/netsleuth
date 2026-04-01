@@ -115,12 +115,15 @@ def suggest_remediation(G: nx.Graph, loops: list[list[str]]) -> list[dict]:
         loops_broken = edge_loop_map.get(frozenset((a, b)), [loop_idx])
         if len(loops_broken) > 1:
             reason = (
-                f"Disabling {local_port} on {a} breaks loops "
+                f"Block {local_port} on {a} via STP priority — breaks loops "
                 + ", ".join(f"#{li + 1}" for li in sorted(loops_broken))
-                + "."
+                + ". If STP is unavailable, disable the port as a last resort."
             )
         else:
-            reason = f"Disabling {local_port} on {a} breaks this loop."
+            reason = (
+                f"Block {local_port} on {a} via STP priority to break this loop. "
+                "If STP is unavailable, disable the port as a last resort."
+            )
 
         covered.update(loops_broken)
 
