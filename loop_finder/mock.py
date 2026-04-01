@@ -87,7 +87,7 @@ def discover_mock(topology_path: str) -> dict[str, Device]:
     devices: dict[str, Device] = {}
 
     with Progress(
-        SpinnerColumn(),
+        SpinnerColumn(spinner_name="line"),
         TextColumn("{task.description}"),
         console=console,
         transient=False,
@@ -118,7 +118,7 @@ def discover_mock(topology_path: str) -> dict[str, Device]:
             device = Device(hostname=hostname, ip=ip, neighbors=neighbors)
             devices[hostname] = device
             progress.console.print(
-                f"[green]  Loaded: {hostname} — {len(neighbors)} neighbour(s)[/green]"
+                f"[green]  Loaded: {hostname} - {len(neighbors)} neighbour(s)[/green]"
             )
 
     console.print(

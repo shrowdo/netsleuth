@@ -1,0 +1,9 @@
+Metadata-Version: 2.4
+Name: network-loop-finder
+Version: 0.1.0
+Summary: Detect loops in a switch network via SSH + CDP/LLDP discovery
+Requires-Python: >=3.11
+Requires-Dist: netmiko>=4.3.0
+Requires-Dist: networkx>=3.3
+Requires-Dist: rich>=13.7.0
+Requires-Dist: PyYAML>=6.0

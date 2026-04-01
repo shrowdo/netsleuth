@@ -97,7 +97,7 @@ def discover(seed_ip: str, creds: dict, max_depth: int = None) -> dict[str, Devi
     queue = [(seed_ip, 0)]
 
     with Progress(
-        SpinnerColumn(),
+        SpinnerColumn(spinner_name="line"),
         TextColumn("{task.description}"),
         console=console,
         transient=False,

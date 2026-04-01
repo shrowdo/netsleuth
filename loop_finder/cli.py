@@ -219,7 +219,7 @@ def print_log_findings(findings) -> None:
 
     if findings.tcn_bursts:
         for b in findings.tcn_bursts:
-            console.print(f"[bold red]  STP Topology Changes: {b['count']} TCNs detected — {b['note']}[/bold red]")
+            console.print(f"[bold red]  STP Topology Changes: {b['count']} TCNs detected - {b['note']}[/bold red]")
 
     if findings.suspect_ports:
         console.print(

@@ -1,0 +1,2 @@
+[console_scripts]
+loop-finder = loop_finder.entry:main
