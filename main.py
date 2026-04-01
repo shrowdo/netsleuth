@@ -30,8 +30,10 @@ from loop_finder.cli import (
     print_remediation,
     print_summary,
     print_stp_status,
+    print_log_findings,
 )
 from loop_finder.stp import get_stp_status, get_stp_status_mock, check_loops_stp_status
+from loop_finder.logparse import get_log_findings, get_log_findings_mock
 
 console = Console()
 
@@ -80,12 +82,9 @@ def main():
 
     console.rule("[bold blue]Network Loop Finder[/bold blue]")
 
-    console.print("\n[bold]Phase 1: Discovery[/bold]")
-
-    creds = {}
+    console.print("\n[bold]Phase 0: Log Analysis[/bold]")
     if args.mock:
-        console.print(f"[yellow]Mock mode: loading topology from {args.mock}[/yellow]")
-        devices = discover_mock(args.mock)
+        log_findings = get_log_findings_mock("seed-switch", has_loop=True)
     else:
         inventory = load_inventory(args.inventory)
         creds = {k: inventory[k] for k in ("username", "password", "device_type") if k in inventory}
@@ -93,7 +92,25 @@ def main():
             creds["port"] = inventory["port"]
         if "key_file" in inventory:
             creds["key_file"] = inventory["key_file"]
+        from loop_finder.discovery import connect
+        conn = connect(
+            ip=inventory["seed"],
+            username=creds["username"],
+            password=creds["password"],
+            device_type=creds["device_type"],
+            port=creds.get("port", 22),
+            key_file=creds.get("key_file"),
+        )
+        log_findings = get_log_findings(conn, inventory["seed"])
+        conn.disconnect()
+    print_log_findings(log_findings)
 
+    console.print("\n[bold]Phase 1: Discovery[/bold]")
+
+    if args.mock:
+        console.print(f"[yellow]Mock mode: loading topology from {args.mock}[/yellow]")
+        devices = discover_mock(args.mock)
+    else:
         devices = discover(
             seed_ip=inventory["seed"],
             creds=creds,

@@ -174,6 +174,60 @@ def print_summary(device_count: int, loop_count: int):
     )
 
 
+def print_log_findings(findings) -> None:
+    """Print a summary of Phase 0 log analysis findings."""
+    from rich.panel import Panel
+
+    if not findings.has_findings:
+        console.print(Panel(
+            "[bold green]No loop indicators found in switch logs.[/bold green]",
+            title="Phase 0: Log Analysis",
+            border_style="green",
+        ))
+        return
+
+    console.print(Panel(
+        "[bold red]Loop indicators detected in switch logs![/bold red]",
+        title="Phase 0: Log Analysis",
+        border_style="red",
+    ))
+
+    if findings.mac_flaps:
+        t = Table(title="MAC Flapping", box=box.SIMPLE_HEAVY)
+        t.add_column("MAC Address", style="yellow")
+        t.add_column("VLAN", style="cyan")
+        t.add_column("Flapping Between Ports", style="red")
+        for f in findings.mac_flaps:
+            t.add_row(f["mac"], f["vlan"], "  <->  ".join(f["ports"]))
+        console.print(t)
+
+    if findings.storm_shutdowns:
+        t = Table(title="Storm Control Events", box=box.SIMPLE_HEAVY)
+        t.add_column("Port", style="red")
+        t.add_column("Action Taken", style="yellow")
+        for f in findings.storm_shutdowns:
+            t.add_row(f["port"], f["action"])
+        console.print(t)
+
+    if findings.bpdu_violations:
+        t = Table(title="BPDU Violations", box=box.SIMPLE_HEAVY)
+        t.add_column("Port", style="red")
+        t.add_column("Type", style="yellow")
+        for f in findings.bpdu_violations:
+            t.add_row(f["port"], f["type"])
+        console.print(t)
+
+    if findings.tcn_bursts:
+        for b in findings.tcn_bursts:
+            console.print(f"[bold red]  STP Topology Changes: {b['count']} TCNs detected — {b['note']}[/bold red]")
+
+    if findings.suspect_ports:
+        console.print(
+            f"\n[bold yellow]Suspect ports from logs:[/bold yellow] "
+            + ", ".join(sorted(findings.suspect_ports))
+        )
+
+
 def print_stp_status(stp_results: list[dict]):
     """
     Print a Rich table summarising whether each detected loop is already
