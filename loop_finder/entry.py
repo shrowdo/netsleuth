@@ -57,6 +57,12 @@ DEVICE_TYPES = [
     "juniper_junos",
     "hp_procurve",
     "hp_comware",
+    # Shorthands — auto-probes the right variant on connect
+    "aruba",
+    "hp",
+    "juniper",
+    "huawei",
+    "extreme",
 ]
 
 
@@ -91,9 +97,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--device-type",
         default="cisco_ios",
-        choices=DEVICE_TYPES,
         metavar="TYPE",
-        help=f"Netmiko device type (default: cisco_ios). Choices: {', '.join(DEVICE_TYPES)}",
+        help=f"Device type (default: cisco_ios). Common values: {', '.join(DEVICE_TYPES)}",
     )
     parser.add_argument(
         "--port",
@@ -137,7 +142,7 @@ def main():
             args.host = input("Switch IP:    ").strip()
             args.username = input("Username:     ").strip()
             args.password = getpass.getpass("Password:     ")
-            device_type = input(f"Device type   [cisco_ios]: ").strip()
+            device_type = input("Device type   [cisco_ios] (e.g. aruba, cisco_ios, arista_eos): ").strip()
             args.device_type = device_type if device_type else "cisco_ios"
         except KeyboardInterrupt:
             console.print("\n[yellow]Cancelled.[/yellow]")

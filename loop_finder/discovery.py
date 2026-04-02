@@ -5,6 +5,16 @@ SSH into switches and discover topology via CDP/LLDP neighbor data.
 import re
 from dataclasses import dataclass, field
 from netmiko import ConnectHandler, NetmikoTimeoutException, NetmikoAuthenticationException
+from netmiko.exceptions import NetmikoBaseException
+
+# When a user types a vendor shorthand (e.g. "aruba"), try these in order.
+_DEVICE_TYPE_ALIASES: dict[str, list[str]] = {
+    "aruba":   ["aruba_aoscx", "aruba_procurve", "aruba_osswitch", "aruba_os"],
+    "hp":      ["hp_procurve", "hp_comware"],
+    "juniper": ["juniper_junos", "juniper"],
+    "huawei":  ["huawei_vrp", "huawei_vrpv8", "huawei"],
+    "extreme": ["extreme_exos", "extreme_nos", "extreme_vsp"],
+}
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
@@ -27,17 +37,30 @@ class Device:
 
 
 def connect(ip: str, username: str, password: str, device_type: str, port: int = 22, key_file: str = None) -> object:
-    params = {
-        "device_type": device_type,
-        "host": ip,
-        "username": username,
-        "password": password,
-        "port": port,
-    }
-    if key_file:
-        params["use_keys"] = True
-        params["key_file"] = key_file
-    return ConnectHandler(**params)
+    candidates = _DEVICE_TYPE_ALIASES.get(device_type.lower(), [device_type])
+
+    last_err = None
+    for dtype in candidates:
+        params = {
+            "device_type": dtype,
+            "host": ip,
+            "username": username,
+            "password": password,
+            "port": port,
+        }
+        if key_file:
+            params["use_keys"] = True
+            params["key_file"] = key_file
+        try:
+            conn = ConnectHandler(**params)
+            if len(candidates) > 1:
+                console.print(f"[dim]  Auto-detected device type: {dtype}[/dim]")
+            return conn
+        except (ValueError, NetmikoBaseException) as e:
+            last_err = e
+            continue
+
+    raise last_err
 
 
 def get_hostname(conn) -> str:
