@@ -141,7 +141,8 @@ def main():
         try:
             args.host = input("Switch IP:    ").strip()
             args.username = input("Username:     ").strip()
-            args.password = getpass.getpass("Password:     ")
+            show = input("Show password? [y/N]: ").strip().lower() == "y"
+            args.password = input("Password:     ") if show else getpass.getpass("Password:     ")
             device_type = input("Device type   [cisco_ios] (e.g. aruba, cisco_ios, arista_eos): ").strip()
             args.device_type = device_type if device_type else "cisco_ios"
         except KeyboardInterrupt:
