@@ -114,7 +114,7 @@ def _aoscx_neighbor_ip(conn, local_port: str) -> str:
     """Get management IP for a single AOS-CX LLDP neighbor via per-port detail."""
     try:
         out = conn.send_command(f"show lldp neighbor-info {local_port}")
-        m = re.search(r"Management Address\s*:\s*(\d+\.\d+\.\d+\.\d+)", out)
+        m = re.search(r"Neighbor Management-Address\s*:\s*(\d+\.\d+\.\d+\.\d+)", out)
         if m:
             return m.group(1)
     except Exception:
