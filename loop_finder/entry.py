@@ -114,14 +114,25 @@ def main():
     parser = build_parser()
     args = parser.parse_args()
 
-    # Validate: need either a host or --mock
+    # If run with no arguments at all, go fully interactive
     if not args.mock and not args.host:
-        parser.error("HOST is required (e.g. loop-finder 192.168.1.1 -u admin)")
+        console.rule("[bold blue]Network Loop Finder[/bold blue]")
+        console.print("[dim]Press Ctrl+C to exit[/dim]\n")
+        try:
+            args.host = input("Switch IP:    ").strip()
+            args.username = input("Username:     ").strip()
+            args.password = getpass.getpass("Password:     ")
+            device_type = input(f"Device type   [cisco_ios]: ").strip()
+            args.device_type = device_type if device_type else "cisco_ios"
+        except KeyboardInterrupt:
+            console.print("\n[yellow]Cancelled.[/yellow]")
+            sys.exit(0)
+        console.print()
 
-    # Prompt for missing credentials in real mode
-    if not args.mock:
+    # Prompt for any missing credentials when flags were partially provided
+    elif not args.mock:
         if not args.username:
-            args.username = input("Username: ")
+            args.username = input("Username: ").strip()
         if not args.password and not args.key_file:
             args.password = getpass.getpass("Password: ")
 
@@ -136,7 +147,9 @@ def main():
         if args.key_file:
             creds["key_file"] = args.key_file
 
-    console.rule("[bold blue]Network Loop Finder[/bold blue]")
+    if args.mock or args.username:
+        # Non-interactive mode — print the header here (interactive mode already printed it)
+        console.rule("[bold blue]Network Loop Finder[/bold blue]")
 
     # Phase 0: Log analysis
     console.print("\n[bold]Phase 0: Log Analysis[/bold]")
