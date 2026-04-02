@@ -53,6 +53,8 @@ Example
             ip: 192.168.1.1
 """
 
+import os
+import sys
 import yaml
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
@@ -60,6 +62,23 @@ from rich.progress import Progress, SpinnerColumn, TextColumn
 from loop_finder.discovery import Device, Neighbor
 
 console = Console()
+
+# Bundled topologies embedded directly so the exe works without any external files.
+# Keys match the filename (with or without leading path).
+_BUNDLED_TOPOLOGIES = {
+    "no_loop.yaml": {"devices": {"SW1": {"ip": "192.168.1.1", "neighbors": [{"hostname": "SW2", "local_port": "GigabitEthernet0/1", "remote_port": "GigabitEthernet0/1", "ip": "192.168.1.2"}, {"hostname": "SW3", "local_port": "GigabitEthernet0/2", "remote_port": "GigabitEthernet0/1", "ip": "192.168.1.3"}, {"hostname": "SW4", "local_port": "GigabitEthernet0/3", "remote_port": "GigabitEthernet0/1", "ip": "192.168.1.4"}]}, "SW2": {"ip": "192.168.1.2", "neighbors": [{"hostname": "SW1", "local_port": "GigabitEthernet0/1", "remote_port": "GigabitEthernet0/1", "ip": "192.168.1.1"}]}, "SW3": {"ip": "192.168.1.3", "neighbors": [{"hostname": "SW1", "local_port": "GigabitEthernet0/1", "remote_port": "GigabitEthernet0/2", "ip": "192.168.1.1"}]}, "SW4": {"ip": "192.168.1.4", "neighbors": [{"hostname": "SW1", "local_port": "GigabitEthernet0/1", "remote_port": "GigabitEthernet0/3", "ip": "192.168.1.1"}]}}},
+    "simple_loop.yaml": {"devices": {"SW1": {"ip": "192.168.1.1", "neighbors": [{"hostname": "SW2", "local_port": "GigabitEthernet0/1", "remote_port": "GigabitEthernet0/1", "ip": "192.168.1.2"}, {"hostname": "SW3", "local_port": "GigabitEthernet0/2", "remote_port": "GigabitEthernet0/2", "ip": "192.168.1.3"}]}, "SW2": {"ip": "192.168.1.2", "neighbors": [{"hostname": "SW1", "local_port": "GigabitEthernet0/1", "remote_port": "GigabitEthernet0/1", "ip": "192.168.1.1"}, {"hostname": "SW3", "local_port": "GigabitEthernet0/2", "remote_port": "GigabitEthernet0/1", "ip": "192.168.1.3"}]}, "SW3": {"ip": "192.168.1.3", "neighbors": [{"hostname": "SW2", "local_port": "GigabitEthernet0/1", "remote_port": "GigabitEthernet0/2", "ip": "192.168.1.2"}, {"hostname": "SW1", "local_port": "GigabitEthernet0/2", "remote_port": "GigabitEthernet0/2", "ip": "192.168.1.1"}]}}},
+    "complex_loop.yaml": {"devices": {"SW1": {"ip": "192.168.1.1", "neighbors": [{"hostname": "SW2", "local_port": "GigabitEthernet0/1", "remote_port": "GigabitEthernet0/1", "ip": "192.168.1.2"}, {"hostname": "SW3", "local_port": "GigabitEthernet0/2", "remote_port": "GigabitEthernet0/2", "ip": "192.168.1.3"}]}, "SW2": {"ip": "192.168.1.2", "neighbors": [{"hostname": "SW1", "local_port": "GigabitEthernet0/1", "remote_port": "GigabitEthernet0/1", "ip": "192.168.1.1"}, {"hostname": "SW3", "local_port": "GigabitEthernet0/2", "remote_port": "GigabitEthernet0/1", "ip": "192.168.1.3"}, {"hostname": "SW4", "local_port": "GigabitEthernet0/3", "remote_port": "GigabitEthernet0/1", "ip": "192.168.1.4"}, {"hostname": "SW5", "local_port": "GigabitEthernet0/4", "remote_port": "GigabitEthernet0/2", "ip": "192.168.1.5"}]}, "SW3": {"ip": "192.168.1.3", "neighbors": [{"hostname": "SW2", "local_port": "GigabitEthernet0/1", "remote_port": "GigabitEthernet0/2", "ip": "192.168.1.2"}, {"hostname": "SW1", "local_port": "GigabitEthernet0/2", "remote_port": "GigabitEthernet0/2", "ip": "192.168.1.1"}]}, "SW4": {"ip": "192.168.1.4", "neighbors": [{"hostname": "SW2", "local_port": "GigabitEthernet0/1", "remote_port": "GigabitEthernet0/3", "ip": "192.168.1.2"}, {"hostname": "SW5", "local_port": "GigabitEthernet0/2", "remote_port": "GigabitEthernet0/1", "ip": "192.168.1.5"}]}, "SW5": {"ip": "192.168.1.5", "neighbors": [{"hostname": "SW4", "local_port": "GigabitEthernet0/1", "remote_port": "GigabitEthernet0/2", "ip": "192.168.1.4"}, {"hostname": "SW2", "local_port": "GigabitEthernet0/2", "remote_port": "GigabitEthernet0/4", "ip": "192.168.1.2"}]}}},
+}
+
+
+def _load_topology(topology_path: str) -> dict:
+    """Load topology data — from bundled dict first, then from file."""
+    filename = os.path.basename(topology_path)
+    if filename in _BUNDLED_TOPOLOGIES:
+        return _BUNDLED_TOPOLOGIES[filename]
+    with open(topology_path, "r") as fh:
+        return yaml.safe_load(fh)
 
 
 def discover_mock(topology_path: str) -> dict[str, Device]:
@@ -75,8 +94,7 @@ def discover_mock(topology_path: str) -> dict[str, Device]:
     :raises FileNotFoundError: If *topology_path* does not exist.
     :raises ValueError: If the YAML file is missing required fields.
     """
-    with open(topology_path, "r") as fh:
-        data = yaml.safe_load(fh)
+    data = _load_topology(topology_path)
 
     if not isinstance(data, dict) or "devices" not in data:
         raise ValueError(
