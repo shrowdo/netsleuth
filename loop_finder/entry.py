@@ -12,7 +12,22 @@ Usage:
 import argparse
 import getpass
 import json
+import os
 import sys
+
+
+def _resolve_path(path: str) -> str:
+    """
+    Resolve a file path, checking the PyInstaller bundle directory (_MEIPASS)
+    as a fallback when the file doesn't exist relative to the current directory.
+    """
+    if os.path.exists(path):
+        return path
+    if hasattr(sys, "_MEIPASS"):
+        bundled = os.path.join(sys._MEIPASS, path)
+        if os.path.exists(bundled):
+            return bundled
+    return path  # let the caller produce the FileNotFoundError
 
 from rich.console import Console
 
@@ -177,7 +192,7 @@ def main():
     console.print("\n[bold]Phase 1: Discovery[/bold]")
     if args.mock:
         console.print(f"[yellow]Mock mode: loading topology from {args.mock}[/yellow]")
-        devices = discover_mock(args.mock)
+        devices = discover_mock(_resolve_path(args.mock))
     else:
         devices = discover(
             seed_ip=args.host,

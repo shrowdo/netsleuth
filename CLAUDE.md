@@ -16,7 +16,7 @@ loop-finder 192.168.1.1 -u admin          # installed CLI
 ## Building the executable
 After any code changes, rebuild the `.exe`:
 ```bash
-pyinstaller --onefile --name loop-finder --collect-all netmiko --collect-all rich --collect-all networkx loop_finder/entry.py
+pyinstaller --onefile --name loop-finder --collect-all netmiko --collect-all rich --collect-all networkx --add-data "topologies;topologies" loop_finder/entry.py
 ```
 Output: `dist/loop-finder.exe` (81MB, self-contained, no Python needed on target machine).
 Do NOT commit `dist/` — it's in `.gitignore`.
