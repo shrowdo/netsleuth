@@ -210,6 +210,9 @@ def discover(seed_ip: str, creds: dict, max_depth: int = None) -> dict[str, Devi
                 device_type = getattr(conn, "device_type", "")
                 if "aoscx" in device_type:
                     neighbors = get_lldp_neighbors_aoscx(conn)
+                    if not neighbors:
+                        # CORE switch may have connected as aoscx but actually be ProCurve
+                        neighbors = get_lldp_neighbors(conn)
                 else:
                     # Try CDP first, fall back to generic LLDP
                     try:
