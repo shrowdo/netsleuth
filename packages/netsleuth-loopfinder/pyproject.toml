@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "netsleuth-loopfinder"
+version = "0.1.0"
+description = "Network loop detection tool — part of the NetSleuth toolkit"
+requires-python = ">=3.11"
+dependencies = [
+    "netsleuth-core>=0.1.0",
+    "networkx>=3.3",
+]
+
+[project.scripts]
+loop-finder = "netsleuth_loopfinder.entry:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["netsleuth_loopfinder*"]

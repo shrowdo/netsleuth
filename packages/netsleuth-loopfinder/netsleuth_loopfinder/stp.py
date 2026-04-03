@@ -3,7 +3,7 @@ Collect STP port states from switches to check if loops are already being blocke
 """
 
 import re
-from loop_finder.discovery import connect
+from netsleuth_core.ssh import connect
 
 
 # Maps raw STP state tokens to normalised abbreviations.

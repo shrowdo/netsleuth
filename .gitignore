@@ -2,7 +2,7 @@
 dist/
 build/
 *.spec
-network_loop_finder.egg-info/
+*.egg-info/
 __pycache__/
 *.pyc
 *.pyo

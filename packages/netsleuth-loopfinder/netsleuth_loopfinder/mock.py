@@ -59,7 +59,7 @@ import yaml
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
-from loop_finder.discovery import Device, Neighbor
+from netsleuth_core.models import Device, Neighbor
 
 console = Console()
 
@@ -90,7 +90,7 @@ def discover_mock(topology_path: str) -> dict[str, Device]:
     live discovery workflow.
 
     :param topology_path: Path to a topology YAML file.
-    :returns: Mapping of hostname -> :class:`~loop_finder.discovery.Device`.
+    :returns: Mapping of hostname -> :class:`~netsleuth_loopfinder.discovery.Device`.
     :raises FileNotFoundError: If *topology_path* does not exist.
     :raises ValueError: If the YAML file is missing required fields.
     """

@@ -31,12 +31,13 @@ def _resolve_path(path: str) -> str:
 
 from rich.console import Console
 
-from loop_finder.discovery import connect, discover
-from loop_finder.mock import discover_mock
-from loop_finder.graph import build_graph, find_loops, get_loop_edges, suggest_remediation
-from loop_finder.logparse import get_log_findings, get_log_findings_mock
-from loop_finder.stp import get_stp_status, get_stp_status_mock, check_loops_stp_status
-from loop_finder.cli import (
+from netsleuth_core.ssh import connect
+from netsleuth_loopfinder.discovery import discover
+from netsleuth_loopfinder.mock import discover_mock
+from netsleuth_loopfinder.graph import build_graph, find_loops, get_loop_edges, suggest_remediation
+from netsleuth_loopfinder.logparse import get_log_findings, get_log_findings_mock
+from netsleuth_loopfinder.stp import get_stp_status, get_stp_status_mock, check_loops_stp_status
+from netsleuth_loopfinder.cli import (
     print_log_findings,
     print_topology,
     print_topology_diagram,
@@ -190,7 +191,7 @@ def main():
             conn.disconnect()
         except Exception as e:
             console.print(f"[yellow]Could not connect for log analysis: {e}[/yellow]")
-            from loop_finder.logparse import LogFindings
+            from netsleuth_loopfinder.logparse import LogFindings
             log_findings = LogFindings()
     print_log_findings(log_findings)
 

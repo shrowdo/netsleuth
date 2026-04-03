@@ -1,26 +1,59 @@
-# network-loop-finder
+# NetSleuth
 
-Tool that discovers switch network topology via SSH + CDP/LLDP and detects loops using graph cycle detection.
+All-in-one network engineering toolkit. Monorepo with individually-installable packages.
+
+**GitHub:** https://github.com/shrowdo/netsleuth
 
 ## Stack
-- Python, Netmiko (SSH), NetworkX (graph/cycles), Rich (CLI output), PyYAML
+- Python, Netmiko (SSH), NetworkX (graph/cycles), Rich (CLI output), Textual (TUI), PyYAML
 
-## Running
-```bash
-pip install -r requirements.txt
-python main.py inventory.yaml              # real switches
-python main.py --mock topologies/simple_loop.yaml  # simulation
-loop-finder 192.168.1.1 -u admin          # installed CLI
+## Monorepo structure
+```
+packages/
+  netsleuth-core/        # Shared: SSH connection, Device/Neighbor models, Rich console
+  netsleuth-loopfinder/  # Standalone loop detection tool (depends on netsleuth-core)
+  netsleuth/             # Meta-package: CLI dispatcher + Textual TUI (depends on all tools)
+loop_finder/             # LEGACY — kept for reference, superseded by packages/
 ```
 
-## Building the executable
-After any code changes, rebuild the `.exe`:
+## Installing & running
+
+### All-in-one
 ```bash
-rm -rf build/ dist/ loop-finder.spec loop_finder/__pycache__
-pyinstaller --onefile --name loop-finder --collect-all netmiko --collect-all rich --collect-all networkx loop_finder/entry.py
+pip install packages/netsleuth packages/netsleuth-core packages/netsleuth-loopfinder
+netsleuth                                        # launches TUI
+netsleuth loopfinder 192.168.1.1 -u admin        # CLI, skip TUI
+netsleuth lf --mock topologies/simple_loop.yaml  # mock mode
 ```
-Output: `dist/loop-finder.exe` (81MB, self-contained, no Python needed on target machine).
-Do NOT commit `dist/` — it's in `.gitignore`.
+
+### Standalone loop finder only
+```bash
+pip install packages/netsleuth-core packages/netsleuth-loopfinder
+loop-finder 192.168.1.1 -u admin
+loop-finder --mock topologies/simple_loop.yaml
+```
+
+## Building executables
+
+### All-in-one (netsleuth.exe)
+```bash
+pip install packages/netsleuth packages/netsleuth-core packages/netsleuth-loopfinder
+pyinstaller --onefile --name netsleuth --collect-all netmiko --collect-all rich --collect-all networkx --collect-all textual packages/netsleuth/netsleuth/entry.py
+```
+
+### Standalone loop finder (loop-finder.exe)
+```bash
+pip install packages/netsleuth-core packages/netsleuth-loopfinder
+pyinstaller --onefile --name loop-finder --collect-all netmiko --collect-all rich --collect-all networkx packages/netsleuth-loopfinder/netsleuth_loopfinder/entry.py
+```
+Output in `dist/`. Do NOT commit `dist/` — it's in `.gitignore`.
+
+## Adding a new tool
+1. Create `packages/netsleuth-<toolname>/` with its own `pyproject.toml`
+2. Add dependency on `netsleuth-core` for shared SSH/models
+3. Register it as a subcommand in `packages/netsleuth/netsleuth/entry.py`
+4. Add a screen in `packages/netsleuth/netsleuth/tui/app.py`
+5. Add its package as a dependency in `packages/netsleuth/pyproject.toml`
 
 ## Working style
 Use parallel subagents with `isolation: "worktree"` whenever tasks split across non-overlapping files or modules. Don't do sequential work when parallel is possible.

@@ -3,7 +3,7 @@ Build a topology graph from discovered devices and detect loops.
 """
 
 import networkx as nx
-from loop_finder.discovery import Device
+from netsleuth_loopfinder.discovery import Device
 
 
 def build_graph(devices: dict[str, Device]) -> nx.Graph:

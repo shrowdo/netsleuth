@@ -8,7 +8,7 @@ from rich.table import Table
 from rich.panel import Panel
 from rich.tree import Tree
 from rich import box
-from loop_finder.graph import get_loop_edges
+from netsleuth_loopfinder.graph import get_loop_edges
 
 console = Console()
 

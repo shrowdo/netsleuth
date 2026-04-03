@@ -1,0 +1,21 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "netsleuth"
+version = "0.1.0"
+description = "NetSleuth — All-in-one network engineering toolkit"
+requires-python = ">=3.11"
+dependencies = [
+    "netsleuth-core>=0.1.0",
+    "netsleuth-loopfinder>=0.1.0",
+    "textual>=0.47.0",
+]
+
+[project.scripts]
+netsleuth = "netsleuth.entry:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["netsleuth*"]

@@ -3,9 +3,7 @@ SSH into switches and discover topology via CDP/LLDP neighbor data.
 """
 
 import re
-from dataclasses import dataclass, field
-from netmiko import ConnectHandler, NetmikoTimeoutException, NetmikoAuthenticationException
-from netmiko.exceptions import NetmikoBaseException
+from netmiko import NetmikoTimeoutException, NetmikoAuthenticationException
 
 # When a user types a vendor shorthand (e.g. "aruba"), try these in order.
 _DEVICE_TYPE_ALIASES: dict[str, list[str]] = {
@@ -18,58 +16,10 @@ _DEVICE_TYPE_ALIASES: dict[str, list[str]] = {
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
+from netsleuth_core.models import Neighbor, Device
+from netsleuth_core.ssh import connect, get_hostname
+
 console = Console()
-
-
-@dataclass
-class Neighbor:
-    hostname: str
-    local_port: str
-    remote_port: str
-    ip: str = ""
-
-
-@dataclass
-class Device:
-    hostname: str
-    ip: str
-    neighbors: list[Neighbor] = field(default_factory=list)
-
-
-def connect(ip: str, username: str, password: str, device_type: str, port: int = 22, key_file: str = None) -> object:
-    candidates = _DEVICE_TYPE_ALIASES.get(device_type.lower(), [device_type])
-
-    last_err = None
-    for dtype in candidates:
-        params = {
-            "device_type": dtype,
-            "host": ip,
-            "username": username,
-            "password": password,
-            "port": port,
-        }
-        if key_file:
-            params["use_keys"] = True
-            params["key_file"] = key_file
-        try:
-            conn = ConnectHandler(**params)
-            if len(candidates) > 1:
-                console.print(f"[dim]  Auto-detected device type: {dtype}[/dim]")
-            return conn
-        except (ValueError, NetmikoBaseException) as e:
-            last_err = e
-            continue
-
-    raise last_err
-
-
-def get_hostname(conn) -> str:
-    output = conn.send_command("show version | include hostname|uptime")
-    match = re.search(r"(\S+)\s+uptime", output)
-    if match:
-        return match.group(1)
-    # fallback: use the prompt
-    return conn.find_prompt().strip("#>")
 
 
 def get_cdp_neighbors(conn) -> list[Neighbor]:
