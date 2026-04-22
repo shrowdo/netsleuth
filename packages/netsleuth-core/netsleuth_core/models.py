@@ -14,3 +14,4 @@ class Device:
     hostname: str
     ip: str
     neighbors: list[Neighbor] = field(default_factory=list)
+    reachable: bool = True

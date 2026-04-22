@@ -31,7 +31,7 @@ def _resolve_path(path: str) -> str:
 
 from rich.console import Console
 
-from netsleuth_core.ssh import connect
+from netsleuth_core.ssh import connect, detect_device_type
 from netsleuth_loopfinder.discovery import discover
 from netsleuth_loopfinder.mock import discover_mock
 from netsleuth_loopfinder.graph import build_graph, find_loops, get_loop_edges, suggest_remediation
@@ -97,9 +97,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--device-type",
-        default="cisco_ios",
+        default="auto",
         metavar="TYPE",
-        help=f"Device type (default: cisco_ios). Common values: {', '.join(DEVICE_TYPES)}",
+        help=(
+            f"Device type for the seed switch (default: auto-detect). "
+            f"Common values: {', '.join(DEVICE_TYPES)}. "
+            "Discovered neighbors are always auto-detected regardless of this setting."
+        ),
     )
     parser.add_argument(
         "--port",
@@ -144,8 +148,8 @@ def main():
             args.username = input("Username:     ").strip()
             show = input("Show password? [y/N]: ").strip().lower() == "y"
             args.password = input("Password:     ") if show else getpass.getpass("Password:     ")
-            device_type = input("Device type   [cisco_ios] (e.g. aruba, cisco_ios, arista_eos): ").strip()
-            args.device_type = device_type if device_type else "cisco_ios"
+            device_type = input("Device type   (leave blank to auto-detect, e.g. aruba, cisco_ios, arista_eos): ").strip()
+            args.device_type = device_type if device_type else "auto"
         except KeyboardInterrupt:
             console.print("\n[yellow]Cancelled.[/yellow]")
             sys.exit(0)
@@ -160,10 +164,23 @@ def main():
 
     creds = {}
     if not args.mock:
+        # Resolve the seed device type — auto-detect now if the user didn't specify one.
+        seed_device_type = args.device_type
+        if seed_device_type == "auto":
+            console.print(f"[dim]Auto-detecting device type for {args.host}...[/dim]")
+            seed_device_type = detect_device_type(
+                ip=args.host,
+                port=args.port,
+                username=args.username,
+                password=args.password or "",
+                key_file=args.key_file if hasattr(args, "key_file") else None,
+            )
+            console.print(f"[dim]  Detected: {seed_device_type}[/dim]")
+
         creds = {
             "username": args.username,
             "password": args.password or "",
-            "device_type": args.device_type,
+            "device_type": seed_device_type,
             "port": args.port,
         }
         if args.key_file:
@@ -205,6 +222,7 @@ def main():
             seed_ip=args.host,
             creds=creds,
             max_depth=args.max_depth,
+            use_hint_for_all=False,
         )
 
     if not devices:

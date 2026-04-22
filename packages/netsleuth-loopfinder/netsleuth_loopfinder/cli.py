@@ -26,7 +26,9 @@ def print_topology(G: nx.Graph):
 
     for node, data in G.nodes(data=True):
         neighbors = ", ".join(G.neighbors(node))
-        table.add_row(node, data.get("ip", ""), neighbors)
+        reachable = data.get("reachable", True)
+        node_label = node if reachable else f"[dim]{node} [unreachable][/dim]"
+        table.add_row(node_label, data.get("ip", ""), neighbors)
 
     console.print(table)
 
@@ -65,21 +67,33 @@ def print_topology_diagram(G: nx.Graph, loops: list[list[str]]):
                 continue
             visited.add(neighbor)
 
-            data = G[parent][neighbor]
+            # MultiGraph: G[parent][neighbor] is {key: data_dict, ...}
+            # Take the first key's data for the label.
+            edge_dict = G[parent][neighbor]
+            first_key = sorted(edge_dict.keys())[0]
+            data = edge_dict[first_key]
             local_port = data.get("local_port", "?")
             remote_port = data.get("remote_port", "?")
             port_label = f"{local_port} -> {remote_port}"
 
+            # Show all parallel ports when there are multiple links
+            parallel_count = len(edge_dict)
+            if parallel_count > 1:
+                port_label += f" (+{parallel_count - 1} parallel)"
+
             is_loop = frozenset((parent, neighbor)) in loop_edge_set
+            neighbor_reachable = G.nodes[neighbor].get("reachable", True)
+            neighbor_label = neighbor if neighbor_reachable else f"{neighbor} [unreachable]"
+
             if is_loop:
                 label = (
-                    f"[bold cyan]{neighbor}[/bold cyan]  "
+                    f"[bold cyan]{neighbor_label}[/bold cyan]  "
                     f"[yellow]{port_label}[/yellow]  "
                     "[bold red]\\[LOOP][/bold red]"
                 )
             else:
                 label = (
-                    f"[bold cyan]{neighbor}[/bold cyan]  "
+                    f"[bold cyan]{neighbor_label}[/bold cyan]  "
                     f"[yellow]{port_label}[/yellow]"
                 )
 

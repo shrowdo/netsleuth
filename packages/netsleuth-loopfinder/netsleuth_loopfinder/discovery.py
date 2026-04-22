@@ -17,7 +17,7 @@ from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from netsleuth_core.models import Neighbor, Device
-from netsleuth_core.ssh import connect, get_hostname
+from netsleuth_core.ssh import connect, get_hostname, detect_device_type
 
 console = Console()
 
@@ -117,14 +117,31 @@ def get_lldp_neighbors_aoscx(conn) -> list[Neighbor]:
     return neighbors
 
 
-def discover(seed_ip: str, creds: dict, max_depth: int = None) -> dict[str, Device]:
+def discover(
+    seed_ip: str,
+    creds: dict,
+    max_depth: int = None,
+    use_hint_for_all: bool = False,
+) -> dict[str, Device]:
     """
     Recursively discover the network topology starting from seed_ip.
     Returns a dict of hostname -> Device.
+
+    Args:
+        seed_ip:          IP of the first switch to connect to.
+        creds:            Dict with username, password, device_type, port, key_file.
+        max_depth:        Maximum hop depth (None = unlimited).
+        use_hint_for_all: When True, use creds["device_type"] for every device.
+                          When False (default), auto-detect the type for every
+                          neighbor IP that is discovered during crawl.
     """
-    visited_ips = set()
+    visited_ips: set[str] = set()
     devices: dict[str, Device] = {}
-    queue = [(seed_ip, 0)]
+    # Queue entries: (ip, depth, device_type_or_None)
+    # device_type_or_None is None for neighbors that need auto-detection.
+    queue: list[tuple[str, int, str | None]] = [(seed_ip, 0, creds["device_type"])]
+    # Cache auto-detected types so we don't probe the same IP twice.
+    detected_types: dict[str, str] = {}
 
     with Progress(
         SpinnerColumn(spinner_name="line"),
@@ -135,12 +152,30 @@ def discover(seed_ip: str, creds: dict, max_depth: int = None) -> dict[str, Devi
         task = progress.add_task("Starting discovery...", total=None)
 
         while queue:
-            ip, depth = queue.pop(0)
+            ip, depth, queued_type = queue.pop(0)
             if ip in visited_ips:
                 continue
             if max_depth is not None and depth > max_depth:
                 continue
             visited_ips.add(ip)
+
+            # Resolve device type for this IP.
+            if queued_type is not None:
+                device_type_to_use = queued_type
+            elif ip in detected_types:
+                device_type_to_use = detected_types[ip]
+            else:
+                progress.update(task, description=f"Detecting device type for {ip}...")
+                dtype = detect_device_type(
+                    ip=ip,
+                    port=creds.get("port", 22),
+                    username=creds["username"],
+                    password=creds["password"],
+                    key_file=creds.get("key_file"),
+                )
+                detected_types[ip] = dtype
+                device_type_to_use = dtype
+                progress.console.print(f"[dim]  Auto-detected {ip} → {dtype}[/dim]")
 
             progress.update(task, description=f"Connecting to {ip}...")
 
@@ -149,7 +184,7 @@ def discover(seed_ip: str, creds: dict, max_depth: int = None) -> dict[str, Devi
                     ip=ip,
                     username=creds["username"],
                     password=creds["password"],
-                    device_type=creds["device_type"],
+                    device_type=device_type_to_use,
                     port=creds.get("port", 22),
                     key_file=creds.get("key_file"),
                 )
@@ -157,8 +192,8 @@ def discover(seed_ip: str, creds: dict, max_depth: int = None) -> dict[str, Devi
                 progress.console.print(f"[green]  Connected: {hostname}[/green]")
 
                 # Use device-specific neighbor discovery
-                device_type = getattr(conn, "device_type", "")
-                if "aoscx" in device_type:
+                connected_device_type = getattr(conn, "device_type", "")
+                if "aoscx" in connected_device_type:
                     neighbors = get_lldp_neighbors_aoscx(conn)
                     if not neighbors:
                         # CORE switch may have connected as aoscx but actually be ProCurve
@@ -179,7 +214,10 @@ def discover(seed_ip: str, creds: dict, max_depth: int = None) -> dict[str, Devi
 
                 for neighbor in neighbors:
                     if neighbor.ip and neighbor.ip not in visited_ips:
-                        queue.append((neighbor.ip, depth + 1))
+                        # For neighbors, pass None so they get auto-detected,
+                        # unless the caller asked us to reuse the user's hint.
+                        neighbor_type = creds["device_type"] if use_hint_for_all else None
+                        queue.append((neighbor.ip, depth + 1, neighbor_type))
 
             except NetmikoAuthenticationException:
                 progress.console.print(f"[red]  Auth failed for {ip}[/red]")
@@ -187,5 +225,21 @@ def discover(seed_ip: str, creds: dict, max_depth: int = None) -> dict[str, Devi
                 progress.console.print(f"[yellow]  Timeout connecting to {ip}[/yellow]")
             except Exception as e:
                 progress.console.print(f"[red]  Error on {ip}: {e}[/red]")
+
+        # Second pass: add stub entries for any neighbor referenced by a
+        # reachable device that we never successfully connected to.  These
+        # stubs keep the edge in the graph so loops through unreachable
+        # switches are not silently dropped.
+        queued_ips = {entry[0] for entry in queue}
+        for device in list(devices.values()):
+            for neighbor in device.neighbors:
+                if neighbor.hostname and neighbor.hostname not in devices:
+                    if not neighbor.ip or neighbor.ip not in queued_ips:
+                        devices[neighbor.hostname] = Device(
+                            hostname=neighbor.hostname,
+                            ip=neighbor.ip,
+                            neighbors=[],
+                            reachable=False,
+                        )
 
     return devices
