@@ -6,6 +6,32 @@ import networkx as nx
 from netsleuth_loopfinder.discovery import Device
 
 
+_PORT_PREFIXES = [
+    ("Gi",  "GigabitEthernet"),
+    ("Fa",  "FastEthernet"),
+    ("Te",  "TenGigabitEthernet"),
+    ("Tw",  "TwoGigabitEthernet"),
+    ("Hu",  "HundredGigE"),
+    ("Fo",  "FortyGigabitEthernet"),
+    ("Et",  "Ethernet"),
+    ("Po",  "Port-channel"),
+    ("Se",  "Serial"),
+    ("Lo",  "Loopback"),
+]
+
+
+def _canonical_port(port: str) -> str:
+    """Normalize interface names so equivalent links deduplicate reliably."""
+    if not port:
+        return ""
+    value = port.strip()
+    for short, long_ in _PORT_PREFIXES:
+        if value.startswith(short) and not value[len(short):len(short) + 1].isalpha():
+            value = long_ + value[len(short):]
+            break
+    return value.lower()
+
+
 def build_graph(devices: dict[str, Device]) -> nx.MultiGraph:
     G = nx.MultiGraph()
     # Track canonical edge keys to avoid adding the same physical link twice.
@@ -26,8 +52,8 @@ def build_graph(devices: dict[str, Device]) -> nx.MultiGraph:
             # Deduplicate: (SW1, Gi0/1) <-> (SW2, Gi0/1) is the same physical
             # link regardless of which side we're looking at it from.
             edge_key = frozenset([
-                (hostname, neighbor.local_port),
-                (neighbor.hostname, neighbor.remote_port),
+                (hostname, _canonical_port(neighbor.local_port)),
+                (neighbor.hostname, _canonical_port(neighbor.remote_port)),
             ])
             if edge_key in added_edges:
                 continue
@@ -92,7 +118,11 @@ def get_loop_edges(G: nx.MultiGraph, cycle: list[str]) -> list[dict]:
     """
     edges = []
     n = len(cycle)
-    for i in range(n):
+    # For 2-node cycles, process the pair once; otherwise we'll duplicate
+    # every parallel link because (A,B) and (B,A) refer to the same edges.
+    hops = 1 if n == 2 else n
+
+    for i in range(hops):
         a = cycle[i]
         b = cycle[(i + 1) % n]
         if not G.has_edge(a, b):
