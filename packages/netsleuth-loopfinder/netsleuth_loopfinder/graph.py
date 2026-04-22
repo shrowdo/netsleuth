@@ -176,7 +176,6 @@ def suggest_remediation(G: nx.MultiGraph, loops: list[list[str]]) -> list[dict]:
         loop_edges.append(edges_in_cycle)
 
     suggestions: list[dict] = []
-    covered: set[int] = set()
 
     for loop_idx, cycle in enumerate(loops):
         edges_in_cycle = loop_edges[loop_idx]
@@ -219,8 +218,6 @@ def suggest_remediation(G: nx.MultiGraph, loops: list[list[str]]) -> list[dict]:
                 f"Block {local_port} on {a} via STP priority to break this loop. "
                 "If STP is unavailable, disable the port as a last resort."
             )
-
-        covered.update(loops_broken)
 
         suggestions.append({
             "loop": loop_idx + 1,
