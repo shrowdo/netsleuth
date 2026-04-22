@@ -1,0 +1,53 @@
+name: LoopFinder Release Assets
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-loopfinder-exe:
+    name: Build loop-finder.exe
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install build dependencies
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip
+          pip install pyinstaller
+          pip install ./packages/netsleuth-core ./packages/netsleuth-loopfinder
+
+      - name: Build executable
+        shell: bash
+        run: |
+          pyinstaller --onefile \
+            --name loop-finder \
+            --collect-all netmiko \
+            --collect-all rich \
+            --collect-all networkx \
+            --collect-all textual \
+            packages/netsleuth-loopfinder/netsleuth_loopfinder/entry.py
+
+      - name: Upload exe as workflow artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: loop-finder-windows-exe
+          path: dist/loop-finder.exe
+
+      - name: Attach exe to GitHub release
+        if: github.event_name == 'release'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/loop-finder.exe
