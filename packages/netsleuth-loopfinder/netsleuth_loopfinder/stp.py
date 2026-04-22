@@ -168,6 +168,7 @@ def get_stp_status(devices: dict, creds: dict) -> dict[str, dict[str, str]]:
     console = Console()
 
     result: dict[str, dict[str, str]] = {}
+    configured_device_type = creds.get("device_type")
 
     for hostname, device in devices.items():
         try:
@@ -179,11 +180,20 @@ def get_stp_status(devices: dict, creds: dict) -> dict[str, dict[str, str]]:
                 password=creds["password"],
                 key_file=creds.get("key_file"),
             )
+            # Keep explicit credentials as a safety net. autodetect currently
+            # falls back to "cisco_ios" when inconclusive, which can override
+            # a valid user-provided non-Cisco device type.
+            connect_device_type = device_type_hint
+            if configured_device_type and (
+                not device_type_hint
+                or (device_type_hint == "cisco_ios" and configured_device_type != "cisco_ios")
+            ):
+                connect_device_type = configured_device_type
             conn = connect(
                 ip=device.ip,
                 username=creds["username"],
                 password=creds["password"],
-                device_type=device_type_hint,
+                device_type=connect_device_type,
                 port=creds.get("port", 22),
                 key_file=creds.get("key_file"),
             )
