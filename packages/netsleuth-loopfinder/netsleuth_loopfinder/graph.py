@@ -62,6 +62,8 @@ def build_graph(devices: dict[str, Device]) -> nx.MultiGraph:
             G.add_edge(
                 hostname,
                 neighbor.hostname,
+                src=hostname,
+                dst=neighbor.hostname,
                 local_port=neighbor.local_port,
                 remote_port=neighbor.remote_port,
             )
@@ -118,9 +120,7 @@ def get_loop_edges(G: nx.MultiGraph, cycle: list[str]) -> list[dict]:
     """
     edges = []
     n = len(cycle)
-    # For 2-node cycles, process the pair once; otherwise we'll duplicate
-    # every parallel link because (A,B) and (B,A) refer to the same edges.
-    hops = 1 if n == 2 else n
+    hops = n
 
     for i in range(hops):
         a = cycle[i]
@@ -130,11 +130,20 @@ def get_loop_edges(G: nx.MultiGraph, cycle: list[str]) -> list[dict]:
         parallel = G[a][b]  # {key: data_dict}
         for key in sorted(parallel.keys()):
             data = parallel[key]
+            if data.get("src") == a:
+                local_port = data.get("local_port", "?")
+                remote_port = data.get("remote_port", "?")
+            else:
+                # Edge attributes are stored in the direction first discovered.
+                # When traversing the opposite orientation, swap port roles so
+                # "from" always maps to the correct local port namespace.
+                local_port = data.get("remote_port", "?")
+                remote_port = data.get("local_port", "?")
             edges.append({
                 "from": a,
                 "to": b,
-                "local_port": data.get("local_port", "?"),
-                "remote_port": data.get("remote_port", "?"),
+                "local_port": local_port,
+                "remote_port": remote_port,
             })
             # For non-parallel hops (longer cycles) only take the first edge
             if n > 2:
