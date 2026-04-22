@@ -7,6 +7,7 @@ Usage:
     loop-finder 192.168.1.1 -u admin --device-type cisco_nxos
     loop-finder 192.168.1.1 -u admin --json results.json
     loop-finder --mock topologies/simple_loop.yaml
+    loop-finder --scan                         # find SSH-reachable hosts and exit
 """
 
 import argparse
@@ -76,8 +77,10 @@ def build_parser() -> argparse.ArgumentParser:
             "Examples:\n"
             "  loop-finder 192.168.1.1 -u admin\n"
             "  loop-finder 192.168.1.1 -u admin -p secret --device-type cisco_nxos\n"
+            "  loop-finder 192.168.1.1 -u admin --extra-creds backup:secret\n"
             "  loop-finder 192.168.1.1 -u admin --json results.json\n"
-            "  loop-finder --mock topologies/simple_loop.yaml"
+            "  loop-finder --mock topologies/simple_loop.yaml\n"
+            "  loop-finder --scan"
         ),
     )
 
@@ -132,24 +135,141 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="TOPOLOGY",
         help="Skip SSH entirely and load a static topology YAML (for testing)",
     )
+    parser.add_argument(
+        "--extra-creds",
+        nargs="+",
+        metavar="user:pass",
+        help=(
+            "One or more fallback credentials in user:pass format, tried in order "
+            "when the primary credentials fail authentication on a device."
+        ),
+    )
+    parser.add_argument(
+        "--no-scan",
+        action="store_true",
+        help="Skip auto-scan of local network and go straight to manual IP prompt",
+    )
+    parser.add_argument(
+        "--scan",
+        action="store_true",
+        help="Scan local network for SSH-reachable hosts and print results, then exit",
+    )
     return parser
+
+
+def _auto_scan_for_host() -> str | None:
+    """
+    Run subnet auto-discovery and return the chosen host IP, or None if the
+    user should be prompted manually.  All exceptions are caught internally.
+    """
+    from netsleuth_loopfinder.scan import get_local_subnets, scan_subnet_for_ssh
+
+    try:
+        subnets = get_local_subnets()
+    except Exception as exc:
+        console.print(f"[yellow]Could not determine local subnets: {exc}[/yellow]")
+        return None
+
+    if not subnets:
+        console.print("[yellow]No local subnets found — falling back to manual entry.[/yellow]")
+        return None
+
+    console.print(f"[dim]Found subnet(s): {', '.join(subnets)}[/dim]")
+
+    all_found: list[str] = []
+    for subnet in subnets:
+        try:
+            found = scan_subnet_for_ssh(subnet)
+            all_found.extend(found)
+        except Exception as exc:
+            console.print(f"[yellow]Scan of {subnet} failed: {exc}[/yellow]")
+
+    if not all_found:
+        console.print("[yellow]No SSH-reachable hosts found — falling back to manual entry.[/yellow]")
+        return None
+
+    if len(all_found) == 1:
+        console.print(f"Found 1 switch: [bold]{all_found[0]}[/bold]")
+        return all_found[0]
+
+    # Multiple candidates — let the user pick
+    console.print(f"\nFound [bold]{len(all_found)}[/bold] SSH-reachable hosts:")
+    for idx, ip in enumerate(all_found, start=1):
+        console.print(f"  [bold]{idx}.[/bold] {ip}")
+    try:
+        raw = input("\nSelect switch [1]: ").strip()
+        choice = int(raw) if raw else 1
+        if 1 <= choice <= len(all_found):
+            return all_found[choice - 1]
+        console.print("[yellow]Invalid selection — falling back to manual entry.[/yellow]")
+    except (ValueError, KeyboardInterrupt):
+        pass
+    return None
 
 
 def main():
     parser = build_parser()
     args = parser.parse_args()
 
+    # --scan: quick "what switches can I reach?" utility, then exit
+    if args.scan:
+        console.rule("[bold blue]Network Loop Finder — SSH Scan[/bold blue]")
+        from netsleuth_loopfinder.scan import get_local_subnets, scan_subnet_for_ssh
+        try:
+            subnets = get_local_subnets()
+            if not subnets:
+                console.print("[yellow]No local subnets detected.[/yellow]")
+                sys.exit(0)
+            console.print(f"[dim]Scanning: {', '.join(subnets)}[/dim]\n")
+            found_any = False
+            for subnet in subnets:
+                results = scan_subnet_for_ssh(subnet)
+                if results:
+                    found_any = True
+                    for ip in results:
+                        console.print(f"  [green]{ip}[/green]")
+            if not found_any:
+                console.print("[yellow]No SSH-reachable hosts found.[/yellow]")
+        except KeyboardInterrupt:
+            console.print("\n[yellow]Cancelled.[/yellow]")
+        sys.exit(0)
+
     # If run with no arguments at all, go fully interactive
     if not args.mock and not args.host:
         console.rule("[bold blue]Network Loop Finder[/bold blue]")
         console.print("[dim]Press Ctrl+C to exit[/dim]\n")
         try:
-            args.host = input("Switch IP:    ").strip()
+            # Auto-scan unless --no-scan was given
+            if not args.no_scan:
+                answer = input("Scan local network for switches automatically? [Y/n]: ").strip().lower()
+                if answer in ("", "y", "yes"):
+                    chosen = _auto_scan_for_host()
+                    if chosen:
+                        args.host = chosen
+
+            # Fall back to manual entry if auto-scan skipped or found nothing
+            if not args.host:
+                args.host = input("Switch IP:    ").strip()
+
             args.username = input("Username:     ").strip()
             show = input("Show password? [y/N]: ").strip().lower() == "y"
             args.password = input("Password:     ") if show else getpass.getpass("Password:     ")
             device_type = input("Device type   (leave blank to auto-detect, e.g. aruba, cisco_ios, arista_eos): ").strip()
             args.device_type = device_type if device_type else "auto"
+
+            # Optional fallback credentials for mixed-password networks
+            args.extra_creds = None
+            if input("Add fallback credentials? [y/N]: ").strip().lower() == "y":
+                fallback_list = []
+                while True:
+                    fb_user = input("Fallback username (blank to stop): ").strip()
+                    if not fb_user:
+                        break
+                    fb_pass = getpass.getpass("Fallback password: ")
+                    fallback_list.append({"username": fb_user, "password": fb_pass})
+                if fallback_list:
+                    args.extra_creds = fallback_list
+
         except KeyboardInterrupt:
             console.print("\n[yellow]Cancelled.[/yellow]")
             sys.exit(0)
@@ -161,6 +281,25 @@ def main():
             args.username = input("Username: ").strip()
         if not args.password and not args.key_file:
             args.password = getpass.getpass("Password: ")
+
+    # Parse --extra-creds "user:pass" tokens into dicts (CLI path).
+    # In interactive mode args.extra_creds is already a list[dict] or None.
+    extra_creds = None
+    if not args.mock:
+        raw_extra = getattr(args, "extra_creds", None)
+        if isinstance(raw_extra, list) and raw_extra and isinstance(raw_extra[0], str):
+            # CLI path: list of "username:password" strings.
+            parsed = []
+            for token in raw_extra:
+                if ":" in token:
+                    u, p = token.split(":", 1)
+                    parsed.append({"username": u, "password": p})
+                else:
+                    console.print(f"[yellow]Ignoring malformed --extra-creds entry (expected user:pass): {token!r}[/yellow]")
+            extra_creds = parsed if parsed else None
+        elif isinstance(raw_extra, list):
+            # Interactive path: already a list[dict].
+            extra_creds = raw_extra if raw_extra else None
 
     creds = {}
     if not args.mock:
@@ -223,6 +362,7 @@ def main():
             creds=creds,
             max_depth=args.max_depth,
             use_hint_for_all=False,
+            extra_creds=extra_creds,
         )
 
     if not devices:

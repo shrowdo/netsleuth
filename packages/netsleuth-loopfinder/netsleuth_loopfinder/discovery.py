@@ -21,6 +21,28 @@ from netsleuth_core.ssh import connect, get_hostname, detect_device_type
 
 console = Console()
 
+# Port abbreviation expansion table (mirrors stp.py _PORT_PREFIXES).
+_PORT_PREFIXES = [
+    ("Gi",  "GigabitEthernet"),
+    ("Fa",  "FastEthernet"),
+    ("Te",  "TenGigabitEthernet"),
+    ("Tw",  "TwoGigabitEthernet"),
+    ("Hu",  "HundredGigE"),
+    ("Fo",  "FortyGigabitEthernet"),
+    ("Et",  "Ethernet"),
+    ("Po",  "Port-channel"),
+    ("Se",  "Serial"),
+    ("Lo",  "Loopback"),
+]
+
+
+def _expand_port(abbrev: str) -> str:
+    """Expand a Cisco abbreviated interface name to its full form."""
+    for short, long_ in _PORT_PREFIXES:
+        if abbrev.startswith(short) and not abbrev[len(short):len(short) + 1].isalpha():
+            return long_ + abbrev[len(short):]
+    return abbrev
+
 
 def get_cdp_neighbors(conn) -> list[Neighbor]:
     output = conn.send_command("show cdp neighbors detail")
@@ -31,12 +53,29 @@ def get_cdp_neighbors(conn) -> list[Neighbor]:
         local_port_match = re.search(r"Interface:\s*(\S+),", block)
         remote_port_match = re.search(r"Outgoing Port(?:ID)?:\s*(\S+)", block, re.IGNORECASE)
         ip_match = re.search(r"IP[Vv]?[46]?\s+[Aa]ddress:\s*(\d+\.\d+\.\d+\.\d+)", block)
+
         if hostname_match and local_port_match:
+            # Strip trailing '~' appended by some IOS versions (truncation marker).
+            raw_hostname = hostname_match.group(1).rstrip("~")
+            # Strip parenthetical suffix e.g. "SW1(Serial0)" -> "SW1".
+            raw_hostname = re.sub(r"\(.*?\)$", "", raw_hostname)
+            hostname = raw_hostname.split(".")[0]  # strip domain
+
+            local_port = _expand_port(local_port_match.group(1))
+            remote_port = _expand_port(remote_port_match.group(1)) if remote_port_match else ""
+
+            # IPv4 first; fall back to IPv6 for topology-edge preservation.
+            if ip_match:
+                ip = ip_match.group(1)
+            else:
+                ipv6_match = re.search(r"IPv6\s+[Aa]ddress:\s*([\da-fA-F:]+)", block)
+                ip = ipv6_match.group(1) if ipv6_match else ""
+
             neighbors.append(Neighbor(
-                hostname=hostname_match.group(1).split(".")[0],  # strip domain
-                local_port=local_port_match.group(1),
-                remote_port=remote_port_match.group(1) if remote_port_match else "",
-                ip=ip_match.group(1) if ip_match else "",
+                hostname=hostname,
+                local_port=local_port,
+                remote_port=remote_port,
+                ip=ip,
             ))
     return neighbors
 
@@ -46,10 +85,25 @@ def get_lldp_neighbors(conn) -> list[Neighbor]:
     neighbors = []
     blocks = re.split(r"-{3,}|={3,}", output)
     for block in blocks:
-        hostname_match = re.search(r"System Name:\s*(\S+)", block)
+        # Case-insensitive to catch Juniper "System name:" as well as "System Name:".
+        hostname_match = re.search(r"System [Nn]ame:\s*(\S+)", block, re.IGNORECASE)
+        # Arista EOS fallback: use Chassis ID as system name.
+        if not hostname_match:
+            hostname_match = re.search(r"Chassis ID:\s*(\S+)", block)
+
         local_port_match = re.search(r"Local Port(?:ID)?:\s*(\S+)", block, re.IGNORECASE)
+        # HP ProCurve uses "PortId:" (no space).
+        if not local_port_match:
+            local_port_match = re.search(r"PortId:\s*(\S+)", block, re.IGNORECASE)
+
         remote_port_match = re.search(r"Port ID:\s*(\S+)", block)
-        ip_match = re.search(r"Management Address.*?(\d+\.\d+\.\d+\.\d+)", block, re.DOTALL)
+        # Fallback: use Port Description if Port ID is absent.
+        if not remote_port_match:
+            remote_port_match = re.search(r"Port Description:\s*(\S+)", block)
+
+        # Tighten management IP search to 300 chars after "Management Address".
+        ip_match = re.search(r"Management Address.{0,300}?(\d+\.\d+\.\d+\.\d+)", block, re.DOTALL)
+
         if hostname_match and local_port_match:
             neighbors.append(Neighbor(
                 hostname=hostname_match.group(1).split(".")[0],
@@ -93,7 +147,11 @@ def get_lldp_neighbors_aoscx(conn) -> list[Neighbor]:
         col_local   = header.index("LOCAL-PORT")
         col_chassis = header.index("CHASSIS-ID")
         col_port_id = header.index("PORT-ID")
-        col_portd   = header.index("PORT-DESC")
+        # PORT-DESC column is absent on some AOS-CX firmware versions.
+        try:
+            col_portd = header.index("PORT-DESC")
+        except ValueError:
+            col_portd = len(header)
         col_ttl     = header.index("TTL")
         col_name    = header.index("SYS-NAME")
     except ValueError:
@@ -117,11 +175,38 @@ def get_lldp_neighbors_aoscx(conn) -> list[Neighbor]:
     return neighbors
 
 
+def _try_connect(ip: str, device_type: str, creds_sets: list[dict]):
+    """
+    Attempt SSH connection using each credential set in order.
+
+    Tries each set sequentially; moves to the next only on
+    NetmikoAuthenticationException.  Timeouts and other errors are re-raised
+    immediately.  Returns ``(connection, used_fallback)`` on the first success,
+    or re-raises the last authentication exception if all sets are exhausted.
+    """
+    last_exc = None
+    for idx, creds in enumerate(creds_sets):
+        try:
+            conn = connect(
+                ip=ip,
+                username=creds["username"],
+                password=creds["password"],
+                device_type=device_type,
+                port=creds.get("port", 22),
+                key_file=creds.get("key_file"),
+            )
+            return conn, idx > 0
+        except NetmikoAuthenticationException as exc:
+            last_exc = exc
+    raise last_exc
+
+
 def discover(
     seed_ip: str,
     creds: dict,
     max_depth: int = None,
     use_hint_for_all: bool = False,
+    extra_creds: list[dict] = None,
 ) -> dict[str, Device]:
     """
     Recursively discover the network topology starting from seed_ip.
@@ -134,6 +219,10 @@ def discover(
         use_hint_for_all: When True, use creds["device_type"] for every device.
                           When False (default), auto-detect the type for every
                           neighbor IP that is discovered during crawl.
+        extra_creds:      Optional list of partial credential dicts to try after
+                          the primary creds when an auth failure occurs.  Each
+                          entry may contain ``username``, ``password``, or both;
+                          missing keys fall back to the primary creds values.
     """
     visited_ips: set[str] = set()
     devices: dict[str, Device] = {}
@@ -142,6 +231,22 @@ def discover(
     queue: list[tuple[str, int, str | None]] = [(seed_ip, 0, creds["device_type"])]
     # Cache auto-detected types so we don't probe the same IP twice.
     detected_types: dict[str, str] = {}
+
+    # Build the ordered list of credential dicts to try for every connection.
+    # The primary set is always first; extra_creds entries fill in missing keys
+    # from the primary set so each dict is self-contained.
+    _base = {
+        "username": creds["username"],
+        "password": creds["password"],
+        "port": creds.get("port", 22),
+        "key_file": creds.get("key_file"),
+    }
+    creds_sets: list[dict] = [_base]
+    if extra_creds:
+        for ec in extra_creds:
+            merged = dict(_base)
+            merged.update({k: v for k, v in ec.items() if v is not None})
+            creds_sets.append(merged)
 
     with Progress(
         SpinnerColumn(spinner_name="line"),
@@ -180,14 +285,10 @@ def discover(
             progress.update(task, description=f"Connecting to {ip}...")
 
             try:
-                conn = connect(
-                    ip=ip,
-                    username=creds["username"],
-                    password=creds["password"],
-                    device_type=device_type_to_use,
-                    port=creds.get("port", 22),
-                    key_file=creds.get("key_file"),
-                )
+                conn, used_fallback = _try_connect(ip, device_type_to_use, creds_sets)
+                if used_fallback:
+                    progress.console.print(f"[dim]  Used fallback credentials for {ip}[/dim]")
+
                 hostname = get_hostname(conn)
                 progress.console.print(f"[green]  Connected: {hostname}[/green]")
 
@@ -214,13 +315,11 @@ def discover(
 
                 for neighbor in neighbors:
                     if neighbor.ip and neighbor.ip not in visited_ips:
-                        # For neighbors, pass None so they get auto-detected,
-                        # unless the caller asked us to reuse the user's hint.
                         neighbor_type = creds["device_type"] if use_hint_for_all else None
                         queue.append((neighbor.ip, depth + 1, neighbor_type))
 
             except NetmikoAuthenticationException:
-                progress.console.print(f"[red]  Auth failed for {ip}[/red]")
+                progress.console.print(f"[red]  Auth failed for {ip} (all credential sets exhausted)[/red]")
             except NetmikoTimeoutException:
                 progress.console.print(f"[yellow]  Timeout connecting to {ip}[/yellow]")
             except Exception as e:
