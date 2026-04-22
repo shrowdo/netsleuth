@@ -3,7 +3,7 @@ Collect STP port states from switches to check if loops are already being blocke
 """
 
 import re
-from netsleuth_core.ssh import connect
+from netsleuth_core.ssh import connect, detect_device_type
 
 
 # Maps raw STP state tokens to normalised abbreviations.
@@ -172,11 +172,18 @@ def get_stp_status(devices: dict, creds: dict) -> dict[str, dict[str, str]]:
     for hostname, device in devices.items():
         try:
             console.print(f"[cyan]STP: connecting to {hostname} ({device.ip})…[/cyan]")
+            device_type_hint = detect_device_type(
+                ip=device.ip,
+                port=creds.get("port", 22),
+                username=creds["username"],
+                password=creds["password"],
+                key_file=creds.get("key_file"),
+            )
             conn = connect(
                 ip=device.ip,
                 username=creds["username"],
                 password=creds["password"],
-                device_type=creds["device_type"],
+                device_type=device_type_hint,
                 port=creds.get("port", 22),
                 key_file=creds.get("key_file"),
             )
