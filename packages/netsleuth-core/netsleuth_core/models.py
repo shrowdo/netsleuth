@@ -15,3 +15,4 @@ class Device:
     ip: str
     neighbors: list[Neighbor] = field(default_factory=list)
     reachable: bool = True
+    device_type: str = ""

@@ -378,7 +378,12 @@ def discover(
 
                 conn.disconnect()
 
-                device = Device(hostname=hostname, ip=ip, neighbors=neighbors)
+                device = Device(
+                    hostname=hostname,
+                    ip=ip,
+                    neighbors=neighbors,
+                    device_type=device_type_to_use,
+                )
                 devices[hostname] = device
 
                 if on_device_found is not None:

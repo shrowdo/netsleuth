@@ -172,13 +172,15 @@ def get_stp_status(devices: dict, creds: dict) -> dict[str, dict[str, str]]:
     for hostname, device in devices.items():
         try:
             console.print(f"[cyan]STP: connecting to {hostname} ({device.ip})…[/cyan]")
-            device_type_hint = detect_device_type(
-                ip=device.ip,
-                port=creds.get("port", 22),
-                username=creds["username"],
-                password=creds["password"],
-                key_file=creds.get("key_file"),
-            )
+            device_type_hint = device.device_type
+            if not device_type_hint:
+                device_type_hint = detect_device_type(
+                    ip=device.ip,
+                    port=creds.get("port", 22),
+                    username=creds["username"],
+                    password=creds["password"],
+                    key_file=creds.get("key_file"),
+                )
             conn = connect(
                 ip=device.ip,
                 username=creds["username"],
