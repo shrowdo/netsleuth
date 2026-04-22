@@ -236,8 +236,13 @@ def main():
 
     # If run with no arguments at all, launch the Textual TUI
     if not args.mock and not args.host and not args.username:
-        from netsleuth_loopfinder.tui import LoopFinderTUI
-        LoopFinderTUI().run()
+        try:
+            from netsleuth_loopfinder.tui import LoopFinderTUI
+            LoopFinderTUI().run()
+        except Exception as e:
+            console.print(f"[red]TUI failed to start: {e}[/red]")
+            console.print("[dim]Try running in Windows Terminal, or use:[/dim]")
+            console.print("[dim]  loop-finder <host> -u <username>[/dim]")
         return
 
     # Prompt for any missing credentials when flags were partially provided

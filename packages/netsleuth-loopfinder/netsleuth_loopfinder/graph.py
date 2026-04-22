@@ -8,6 +8,12 @@ from netsleuth_loopfinder.discovery import Device
 
 def build_graph(devices: dict[str, Device]) -> nx.MultiGraph:
     G = nx.MultiGraph()
+    # Track canonical edge keys to avoid adding the same physical link twice.
+    # Each device reports its neighbors, so SW1→SW2 and SW2→SW1 both appear
+    # in the data for a single cable. The canonical key is an unordered pair
+    # of (node, port) endpoints so the same link seen from either end matches.
+    added_edges: set[frozenset] = set()
+
     for hostname, device in devices.items():
         G.add_node(hostname, ip=device.ip, reachable=getattr(device, "reachable", True))
         for neighbor in device.neighbors:
@@ -16,6 +22,17 @@ def build_graph(devices: dict[str, Device]) -> nx.MultiGraph:
             # Ensure the neighbor node exists even if it has no Device entry
             if neighbor.hostname not in G:
                 G.add_node(neighbor.hostname, ip=neighbor.ip, reachable=False)
+
+            # Deduplicate: (SW1, Gi0/1) <-> (SW2, Gi0/1) is the same physical
+            # link regardless of which side we're looking at it from.
+            edge_key = frozenset([
+                (hostname, neighbor.local_port),
+                (neighbor.hostname, neighbor.remote_port),
+            ])
+            if edge_key in added_edges:
+                continue
+            added_edges.add(edge_key)
+
             G.add_edge(
                 hostname,
                 neighbor.hostname,
