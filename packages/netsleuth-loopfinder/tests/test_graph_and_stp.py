@@ -59,23 +59,34 @@ class _FakeConn:
 
 
 def test_get_stp_status_uses_detected_device_type(monkeypatch):
-    captured = {}
+    captured = []
+    detect_calls = []
 
     def fake_detect_device_type(**kwargs):
+        detect_calls.append(kwargs["ip"])
         return "arista_eos"
 
     def fake_connect(**kwargs):
-        captured["device_type"] = kwargs["device_type"]
+        captured.append((kwargs["ip"], kwargs["device_type"]))
         return _FakeConn()
 
     monkeypatch.setattr(stp, "detect_device_type", fake_detect_device_type)
     monkeypatch.setattr(stp, "connect", fake_connect)
     monkeypatch.setattr(stp, "_parse_stp_output", lambda output: {"Ethernet1": "FWD"})
 
-    devices = {"SW1": Device(hostname="SW1", ip="10.0.0.1", neighbors=[])}
+    devices = {
+        "SW1": Device(hostname="SW1", ip="10.0.0.1", neighbors=[]),
+        "SW2": Device(
+            hostname="SW2",
+            ip="10.0.0.2",
+            neighbors=[],
+            device_type="juniper_junos",
+        ),
+    }
     creds = {"username": "u", "password": "p", "device_type": "cisco_ios", "port": 22}
 
     result = stp.get_stp_status(devices, creds)
 
-    assert captured["device_type"] == "arista_eos"
-    assert result == {"SW1": {"Ethernet1": "FWD"}}
+    assert detect_calls == ["10.0.0.1"]
+    assert captured == [("10.0.0.1", "arista_eos"), ("10.0.0.2", "juniper_junos")]
+    assert result == {"SW1": {"Ethernet1": "FWD"}, "SW2": {"Ethernet1": "FWD"}}
