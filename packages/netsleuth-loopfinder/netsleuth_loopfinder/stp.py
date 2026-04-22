@@ -59,6 +59,82 @@ def _expand_port(abbrev: str) -> str:
     return abbrev
 
 
+def _parse_stp_output_juniper(output: str) -> dict[str, str]:
+    """
+    Parse Juniper ``show spanning-tree interface`` output.
+
+    Example lines::
+
+        ge-0/0/0.0     Forwarding  Designated
+        ge-0/0/1.0     Blocking    Root
+    """
+    ports: dict[str, str] = {}
+    pattern = re.compile(
+        r"^(?P<port>\S+)\s+(?P<state>Forwarding|Blocking|Learning|Listening|Discarding)\s+",
+        re.IGNORECASE | re.MULTILINE,
+    )
+    for m in pattern.finditer(output):
+        port = m.group("port")
+        state = _STATE_MAP.get(m.group("state").lower(), m.group("state").upper())
+        ports[port] = state
+    return ports
+
+
+def _parse_stp_output_huawei(output: str) -> dict[str, str]:
+    """
+    Parse Huawei ``display stp brief`` output.
+
+    Example lines::
+
+      0    GigabitEthernet0/0/1   ROOT   FORWARDING  NONE
+      0    GigabitEthernet0/0/2   DESI   FORWARDING  NONE
+    """
+    _huawei_state_map = {
+        "FORWARDING": "FWD",
+        "BLOCKING":   "BLK",
+        "LEARNING":   "LRN",
+        "DISCARDING": "BLK",  # Huawei RSTP uses DISCARDING instead of BLOCKING
+    }
+    ports: dict[str, str] = {}
+    pattern = re.compile(
+        r"^\s*\d+\s+(?P<port>\S+)\s+\S+\s+(?P<state>FORWARDING|BLOCKING|LEARNING|DISCARDING)\s+",
+        re.IGNORECASE | re.MULTILINE,
+    )
+    for m in pattern.finditer(output):
+        port = m.group("port")
+        state = _huawei_state_map.get(m.group("state").upper(), m.group("state").upper())
+        ports[port] = state
+    return ports
+
+
+def _get_stp_output(conn) -> str:
+    """
+    Issue the appropriate STP command for the connected device and return raw output.
+    Returns an empty string if the command fails.
+    """
+    device_type: str = getattr(conn, "device_type", "") or ""
+
+    # Huawei VRP
+    if any(dt in device_type for dt in ("huawei_vrp", "huawei_vrpv8")):
+        try:
+            return conn.send_command("display stp brief")
+        except Exception:
+            return ""
+
+    # Juniper JunOS
+    if "juniper" in device_type:
+        try:
+            return conn.send_command("show spanning-tree interface")
+        except Exception:
+            return ""
+
+    # Cisco IOS/XE/NX-OS, Arista EOS, HP ProCurve / Aruba, AOS-CX — standard command
+    try:
+        return conn.send_command("show spanning-tree")
+    except Exception:
+        return ""
+
+
 def _parse_stp_output(output: str) -> dict[str, str]:
     """
     Parse ``show spanning-tree`` output and return {full_port_name: state_abbrev}.
@@ -104,10 +180,17 @@ def get_stp_status(devices: dict, creds: dict) -> dict[str, dict[str, str]]:
                 port=creds.get("port", 22),
                 key_file=creds.get("key_file"),
             )
-            output = conn.send_command("show spanning-tree")
+            device_type: str = getattr(conn, "device_type", "") or ""
+            output = _get_stp_output(conn)
             conn.disconnect()
 
-            ports = _parse_stp_output(output)
+            # Choose the right parser based on the vendor
+            if any(dt in device_type for dt in ("huawei_vrp", "huawei_vrpv8")):
+                ports = _parse_stp_output_huawei(output)
+            elif "juniper" in device_type:
+                ports = _parse_stp_output_juniper(output)
+            else:
+                ports = _parse_stp_output(output)
             result[hostname] = ports
             console.print(f"[green]  STP data collected: {len(ports)} port(s)[/green]")
         except Exception as exc:

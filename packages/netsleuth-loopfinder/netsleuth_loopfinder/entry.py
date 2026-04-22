@@ -234,46 +234,11 @@ def main():
             console.print("\n[yellow]Cancelled.[/yellow]")
         sys.exit(0)
 
-    # If run with no arguments at all, go fully interactive
-    if not args.mock and not args.host:
-        console.rule("[bold blue]Network Loop Finder[/bold blue]")
-        console.print("[dim]Press Ctrl+C to exit[/dim]\n")
-        try:
-            # Auto-scan unless --no-scan was given
-            if not args.no_scan:
-                answer = input("Scan local network for switches automatically? [Y/n]: ").strip().lower()
-                if answer in ("", "y", "yes"):
-                    chosen = _auto_scan_for_host()
-                    if chosen:
-                        args.host = chosen
-
-            # Fall back to manual entry if auto-scan skipped or found nothing
-            if not args.host:
-                args.host = input("Switch IP:    ").strip()
-
-            args.username = input("Username:     ").strip()
-            show = input("Show password? [y/N]: ").strip().lower() == "y"
-            args.password = input("Password:     ") if show else getpass.getpass("Password:     ")
-            device_type = input("Device type   (leave blank to auto-detect, e.g. aruba, cisco_ios, arista_eos): ").strip()
-            args.device_type = device_type if device_type else "auto"
-
-            # Optional fallback credentials for mixed-password networks
-            args.extra_creds = None
-            if input("Add fallback credentials? [y/N]: ").strip().lower() == "y":
-                fallback_list = []
-                while True:
-                    fb_user = input("Fallback username (blank to stop): ").strip()
-                    if not fb_user:
-                        break
-                    fb_pass = getpass.getpass("Fallback password: ")
-                    fallback_list.append({"username": fb_user, "password": fb_pass})
-                if fallback_list:
-                    args.extra_creds = fallback_list
-
-        except KeyboardInterrupt:
-            console.print("\n[yellow]Cancelled.[/yellow]")
-            sys.exit(0)
-        console.print()
+    # If run with no arguments at all, launch the Textual TUI
+    if not args.mock and not args.host and not args.username:
+        from netsleuth_loopfinder.tui import LoopFinderTUI
+        LoopFinderTUI().run()
+        return
 
     # Prompt for any missing credentials when flags were partially provided
     elif not args.mock:

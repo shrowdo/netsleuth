@@ -3,6 +3,7 @@ SSH into switches and discover topology via CDP/LLDP neighbor data.
 """
 
 import re
+import time
 from netmiko import NetmikoTimeoutException, NetmikoAuthenticationException
 
 # When a user types a vendor shorthand (e.g. "aruba"), try these in order.
@@ -175,6 +176,73 @@ def get_lldp_neighbors_aoscx(conn) -> list[Neighbor]:
     return neighbors
 
 
+def get_lldp_neighbors_huawei(conn) -> list[Neighbor]:
+    """
+    Parse ``display lldp neighbor detail`` output from Huawei VRP devices.
+    Returns [] on any failure so discovery can continue.
+    """
+    try:
+        output = conn.send_command("display lldp neighbor detail")
+        neighbors = []
+        # Blocks are separated by lines of dashes
+        blocks = re.split(r"-{3,}", output)
+        for block in blocks:
+            hostname_match = re.search(r"System name:\s*(\S+)", block, re.IGNORECASE)
+            local_port_match = re.search(r"Port name:\s*(\S+)", block, re.IGNORECASE)
+            remote_port_match = re.search(r"Neighbor port ID:\s*(\S+)", block, re.IGNORECASE)
+            ip_match = re.search(r"Management address:\s*(\d+\.\d+\.\d+\.\d+)", block, re.IGNORECASE)
+
+            if hostname_match and local_port_match:
+                neighbors.append(Neighbor(
+                    hostname=hostname_match.group(1).split(".")[0],
+                    local_port=local_port_match.group(1),
+                    remote_port=remote_port_match.group(1) if remote_port_match else "",
+                    ip=ip_match.group(1) if ip_match else "",
+                ))
+        return neighbors
+    except Exception:
+        return []
+
+
+def _get_neighbors(conn) -> list[Neighbor]:
+    """
+    Dispatch to the right neighbor-discovery function based on ``conn.device_type``.
+    """
+    device_type: str = getattr(conn, "device_type", "") or ""
+
+    # Huawei VRP
+    if any(dt in device_type for dt in ("huawei_vrp", "huawei_vrpv8")):
+        return get_lldp_neighbors_huawei(conn)
+
+    # Aruba AOS-CX — dedicated parser, fall back to generic LLDP
+    if "aruba_aoscx" in device_type:
+        neighbors = get_lldp_neighbors_aoscx(conn)
+        if not neighbors:
+            neighbors = get_lldp_neighbors(conn)
+        return neighbors
+
+    # Cisco variants, Arista EOS, Juniper JunOS, HP ProCurve / Aruba —
+    # try CDP first, then fall back to generic LLDP
+    if any(dt in device_type for dt in (
+        "cisco_ios", "cisco_xe", "cisco_nxos", "cisco_xr",
+        "arista_eos", "juniper_junos", "hp_procurve",
+        "aruba_procurve", "aruba_osswitch",
+    )):
+        try:
+            neighbors = get_cdp_neighbors(conn)
+            if not neighbors:
+                neighbors = get_lldp_neighbors(conn)
+            return neighbors
+        except Exception:
+            return get_lldp_neighbors(conn)
+
+    # All other vendors — generic LLDP only
+    try:
+        return get_lldp_neighbors(conn)
+    except Exception:
+        return []
+
+
 def _try_connect(ip: str, device_type: str, creds_sets: list[dict]):
     """
     Attempt SSH connection using each credential set in order.
@@ -207,6 +275,9 @@ def discover(
     max_depth: int = None,
     use_hint_for_all: bool = False,
     extra_creds: list[dict] = None,
+    timeout_seconds: int = None,
+    on_device_found: callable = None,
+    on_device_failed: callable = None,
 ) -> dict[str, Device]:
     """
     Recursively discover the network topology starting from seed_ip.
@@ -223,6 +294,15 @@ def discover(
                           the primary creds when an auth failure occurs.  Each
                           entry may contain ``username``, ``password``, or both;
                           missing keys fall back to the primary creds values.
+        timeout_seconds:  If set, stop processing new devices from the queue
+                          after this many seconds have elapsed.  A yellow
+                          warning is printed and the while-loop exits early.
+                          The stub-entry second pass still runs afterwards.
+        on_device_found:  Optional callable(hostname, ip, neighbor_count) invoked
+                          after each device is successfully connected and its
+                          neighbors retrieved.  Default None (no-op).
+        on_device_failed: Optional callable(ip, ip) invoked when a device
+                          connection fails.  Default None (no-op).
     """
     visited_ips: set[str] = set()
     devices: dict[str, Device] = {}
@@ -247,6 +327,8 @@ def discover(
             merged = dict(_base)
             merged.update({k: v for k, v in ec.items() if v is not None})
             creds_sets.append(merged)
+
+    start_time = time.monotonic() if timeout_seconds is not None else None
 
     with Progress(
         SpinnerColumn(spinner_name="line"),
@@ -292,26 +374,15 @@ def discover(
                 hostname = get_hostname(conn)
                 progress.console.print(f"[green]  Connected: {hostname}[/green]")
 
-                # Use device-specific neighbor discovery
-                connected_device_type = getattr(conn, "device_type", "")
-                if "aoscx" in connected_device_type:
-                    neighbors = get_lldp_neighbors_aoscx(conn)
-                    if not neighbors:
-                        # CORE switch may have connected as aoscx but actually be ProCurve
-                        neighbors = get_lldp_neighbors(conn)
-                else:
-                    # Try CDP first, fall back to generic LLDP
-                    try:
-                        neighbors = get_cdp_neighbors(conn)
-                        if not neighbors:
-                            neighbors = get_lldp_neighbors(conn)
-                    except Exception:
-                        neighbors = get_lldp_neighbors(conn)
+                neighbors = _get_neighbors(conn)
 
                 conn.disconnect()
 
                 device = Device(hostname=hostname, ip=ip, neighbors=neighbors)
                 devices[hostname] = device
+
+                if on_device_found is not None:
+                    on_device_found(hostname, ip, len(neighbors))
 
                 for neighbor in neighbors:
                     if neighbor.ip and neighbor.ip not in visited_ips:
@@ -320,10 +391,24 @@ def discover(
 
             except NetmikoAuthenticationException:
                 progress.console.print(f"[red]  Auth failed for {ip} (all credential sets exhausted)[/red]")
+                if on_device_failed is not None:
+                    on_device_failed(ip, ip)
             except NetmikoTimeoutException:
                 progress.console.print(f"[yellow]  Timeout connecting to {ip}[/yellow]")
+                if on_device_failed is not None:
+                    on_device_failed(ip, ip)
             except Exception as e:
                 progress.console.print(f"[red]  Error on {ip}: {e}[/red]")
+                if on_device_failed is not None:
+                    on_device_failed(ip, ip)
+
+            # Discovery timeout check — runs after every device attempt.
+            if start_time is not None and (time.monotonic() - start_time) > timeout_seconds:
+                progress.console.print(
+                    f"[yellow]  Discovery timeout ({timeout_seconds}s) reached — "
+                    f"stopping early ({len(queue)} device(s) remaining in queue)[/yellow]"
+                )
+                break
 
         # Second pass: add stub entries for any neighbor referenced by a
         # reachable device that we never successfully connected to.  These

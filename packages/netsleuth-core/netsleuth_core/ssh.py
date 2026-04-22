@@ -116,9 +116,86 @@ def connect(ip: str, username: str, password: str, device_type: str, port: int =
 
 
 def get_hostname(conn) -> str:
-    output = conn.send_command("show version | include hostname|uptime")
-    match = re.search(r"(\S+)\s+uptime", output)
-    if match:
-        return match.group(1)
-    # fallback: use the prompt
-    return conn.find_prompt().strip("#>")
+    """
+    Return the hostname of the connected device.
+
+    Dispatches by ``conn.device_type`` to issue the right command for each
+    vendor.  Every branch is wrapped in try/except so any command failure
+    falls through to the universal prompt-based fallback.
+    """
+    device_type: str = getattr(conn, "device_type", "") or ""
+
+    # --- Cisco IOS / XE / NX-OS / XR ---
+    if any(dt in device_type for dt in ("cisco_ios", "cisco_xe", "cisco_nxos", "cisco_xr")):
+        try:
+            output = conn.send_command("show version | include hostname")
+            match = re.search(r"(\S+)\s+uptime", output)
+            if match:
+                return match.group(1)
+            # Some IOS versions don't print uptime in that line; try running-config
+            output2 = conn.send_command("show running-config | include hostname")
+            match2 = re.search(r"hostname\s+(\S+)", output2)
+            if match2:
+                return match2.group(1)
+        except Exception:
+            pass
+
+    # --- Arista EOS ---
+    elif "arista_eos" in device_type:
+        try:
+            output = conn.send_command("show hostname")
+            first_line = output.strip().splitlines()[0].strip()
+            if first_line:
+                return first_line
+        except Exception:
+            pass
+
+    # --- Juniper JunOS ---
+    elif "juniper" in device_type:
+        try:
+            output = conn.send_command("show version | match Hostname")
+            match = re.search(r"Hostname:\s*(\S+)", output)
+            if match:
+                return match.group(1)
+        except Exception:
+            pass
+
+    # --- Aruba AOS-CX ---
+    elif "aruba_aoscx" in device_type:
+        try:
+            output = conn.send_command("show system | include Hostname")
+            match = re.search(r"Hostname\s*[:|]\s*(\S+)", output)
+            if match:
+                return match.group(1)
+        except Exception:
+            pass
+
+    # --- HP ProCurve / Aruba OS Switch / Aruba ProCurve ---
+    elif any(dt in device_type for dt in ("hp_procurve", "aruba_osswitch", "aruba_procurve")):
+        try:
+            output = conn.send_command("show system-information")
+            match = re.search(r"System Name\s*[:\.]+\s*(\S+)", output)
+            if match:
+                return match.group(1)
+        except Exception:
+            pass
+
+    # --- Huawei VRP ---
+    elif any(dt in device_type for dt in ("huawei_vrp", "huawei_vrpv8")):
+        try:
+            output = conn.send_command("display version")
+            # Huawei prompt is <hostname> or [hostname]; try parsing the prompt directly.
+            prompt = conn.find_prompt().strip()
+            match = re.match(r"[<\[](.*?)[>\]]", prompt)
+            if match:
+                return match.group(1)
+        except Exception:
+            pass
+
+    # --- Universal prompt-based fallback ---
+    try:
+        prompt = conn.find_prompt().strip()
+        # Strip all common prompt trailer characters: #, >, <, [, ]
+        return prompt.strip("#><[]")
+    except Exception:
+        return "unknown"
