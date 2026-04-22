@@ -163,7 +163,7 @@ class SetupScreen(Screen):
                 )
             # Scan Network button + status
             with Horizontal(id="scan-row"):
-                yield Button("[ Scan Network ]", id="scan-btn", variant="default")
+                yield Button("Scan Network", id="scan-btn", variant="default")
                 yield Static("", id="scan-status")
             # Dropdown when multiple IPs found
             with Horizontal(id="scan-select-row"):
@@ -230,7 +230,7 @@ class SetupScreen(Screen):
                         classes="fb-input",
                     )
 
-            yield Button("[ Start ]", id="start-btn", variant="primary")
+            yield Button("Start", id="start-btn", variant="primary")
 
         yield Footer()
 
