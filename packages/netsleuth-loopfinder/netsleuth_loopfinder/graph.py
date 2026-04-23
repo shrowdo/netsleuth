@@ -198,7 +198,8 @@ def suggest_remediation(G: nx.MultiGraph, loops: list[list[str]]) -> list[dict]:
                 best_coverage = coverage
                 best_edge = (a, b)
 
-        a, b = best_edge  # type: ignore[misc]
+        assert best_edge is not None
+        a, b = best_edge
 
         # Pick the first parallel edge for port info
         parallel = G[a][b]

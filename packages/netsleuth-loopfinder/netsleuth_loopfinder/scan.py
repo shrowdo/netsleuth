@@ -9,7 +9,6 @@ Provides:
 import ipaddress
 import socket
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Optional
 
 
 def get_local_subnets() -> list[str]:
@@ -104,7 +103,7 @@ def scan_subnet_for_ssh(
 
     found: list[str] = []
 
-    def _probe(ip_str: str) -> Optional[str]:
+    def _probe(ip_str: str) -> str | None:
         try:
             with socket.create_connection((ip_str, port), timeout=timeout):
                 return ip_str

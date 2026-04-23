@@ -33,19 +33,11 @@ def print_topology(G: nx.Graph):
     console.print(table)
 
 
-def print_topology_diagram(G: nx.Graph, loops: list[list[str]]):
+def build_topology_tree(G: nx.Graph, loops: list[list[str]]) -> Tree:
     """
-    Draw a simple ASCII spanning-tree diagram of the network using Rich's Tree
-    widget. Edges that are part of a detected loop are labelled in red with
-    [LOOP].
-
-    The diagram is rooted at the first node in the graph (or skipped entirely
-    when the graph is empty).
+    Build a Rich Tree spanning the network graph with loop edges highlighted.
+    Returns the Tree object; callers decide how to render it.
     """
-    if G.number_of_nodes() == 0:
-        return
-
-    # Build a set of canonical loop edges for fast lookup.
     loop_edge_set: set[frozenset] = set()
     for cycle in loops:
         for i in range(len(cycle)):
@@ -55,36 +47,25 @@ def print_topology_diagram(G: nx.Graph, loops: list[list[str]]):
                 loop_edge_set.add(frozenset((a, b)))
 
     root_node = next(iter(G.nodes()))
-
-    # Use BFS over the graph to build a spanning tree so we visit every node
-    # exactly once, even when the graph has cycles.
     tree = Tree(f"[bold cyan]{root_node}[/bold cyan]")
     visited: set[str] = {root_node}
 
-    def _add_children(parent_label: Tree, parent: str) -> None:
+    def _add_children(parent_branch: Tree, parent: str) -> None:
         for neighbor in G.neighbors(parent):
             if neighbor in visited:
                 continue
             visited.add(neighbor)
-
-            # MultiGraph: G[parent][neighbor] is {key: data_dict, ...}
-            # Take the first key's data for the label.
             edge_dict = G[parent][neighbor]
             first_key = sorted(edge_dict.keys())[0]
             data = edge_dict[first_key]
             local_port = data.get("local_port", "?")
             remote_port = data.get("remote_port", "?")
             port_label = f"{local_port} -> {remote_port}"
-
-            # Show all parallel ports when there are multiple links
-            parallel_count = len(edge_dict)
-            if parallel_count > 1:
-                port_label += f" (+{parallel_count - 1} parallel)"
-
+            if len(edge_dict) > 1:
+                port_label += f" (+{len(edge_dict) - 1} parallel)"
             is_loop = frozenset((parent, neighbor)) in loop_edge_set
             neighbor_reachable = G.nodes[neighbor].get("reachable", True)
             neighbor_label = neighbor if neighbor_reachable else f"{neighbor} [unreachable]"
-
             if is_loop:
                 label = (
                     f"[bold cyan]{neighbor_label}[/bold cyan]  "
@@ -96,15 +77,20 @@ def print_topology_diagram(G: nx.Graph, loops: list[list[str]]):
                     f"[bold cyan]{neighbor_label}[/bold cyan]  "
                     f"[yellow]{port_label}[/yellow]"
                 )
-
-            child_branch = parent_label.add(label)
+            child_branch = parent_branch.add(label)
             _add_children(child_branch, neighbor)
 
     _add_children(tree, root_node)
+    return tree
 
+
+def print_topology_diagram(G: nx.Graph, loops: list[list[str]]):
+    """Print an ASCII spanning-tree diagram with loop edges highlighted."""
+    if G.number_of_nodes() == 0:
+        return
     console.print()
     console.print("[bold]Topology Diagram[/bold]")
-    console.print(tree)
+    console.print(build_topology_tree(G, loops))
 
 
 def print_loops(G: nx.Graph, loops: list[list[str]]):

@@ -135,14 +135,12 @@ class LoopFinderScreen(Screen):
                 return
 
             cmd = [sys.executable, "-m", "netsleuth_loopfinder.entry", host, "-u", username]
-            if password:
-                cmd += ["-p", password]
             if device_type and device_type is not Select.BLANK:
                 cmd += ["--device-type", str(device_type)]
 
-        self.run_worker(lambda: self._stream(cmd), thread=True)
+        self.run_worker(lambda: self._stream(cmd, password if not mock else ""), thread=True)
 
-    def _stream(self, cmd: list) -> None:
+    def _stream(self, cmd: list, password: str = "") -> None:
         log = self.query_one("#output", Log)
 
         def write(line: str) -> None:
@@ -152,7 +150,10 @@ class LoopFinderScreen(Screen):
         write("Running...")
         write("-" * 60)
 
+        # Pass password via environment variable to avoid exposing it in the process list.
         env = {**os.environ, "NO_COLOR": "1"}
+        if password:
+            env["NETSLEUTH_PASSWORD"] = password
         proc = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
