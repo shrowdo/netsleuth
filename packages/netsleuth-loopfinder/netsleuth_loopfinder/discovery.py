@@ -4,45 +4,17 @@ SSH into switches and discover topology via CDP/LLDP neighbor data.
 
 import re
 import time
+from collections import deque
+from collections.abc import Callable
 from netmiko import NetmikoTimeoutException, NetmikoAuthenticationException
-
-# When a user types a vendor shorthand (e.g. "aruba"), try these in order.
-_DEVICE_TYPE_ALIASES: dict[str, list[str]] = {
-    "aruba":   ["aruba_aoscx", "aruba_procurve", "aruba_osswitch", "aruba_os"],
-    "hp":      ["hp_procurve", "hp_comware"],
-    "juniper": ["juniper_junos", "juniper"],
-    "huawei":  ["huawei_vrp", "huawei_vrpv8", "huawei"],
-    "extreme": ["extreme_exos", "extreme_nos", "extreme_vsp"],
-}
 from rich.console import Console
 from rich.progress import Progress, SpinnerColumn, TextColumn
 
 from netsleuth_core.models import Neighbor, Device
+from netsleuth_core.ports import expand_port as _expand_port
 from netsleuth_core.ssh import connect, get_hostname, detect_device_type
 
 console = Console()
-
-# Port abbreviation expansion table (mirrors stp.py _PORT_PREFIXES).
-_PORT_PREFIXES = [
-    ("Gi",  "GigabitEthernet"),
-    ("Fa",  "FastEthernet"),
-    ("Te",  "TenGigabitEthernet"),
-    ("Tw",  "TwoGigabitEthernet"),
-    ("Hu",  "HundredGigE"),
-    ("Fo",  "FortyGigabitEthernet"),
-    ("Et",  "Ethernet"),
-    ("Po",  "Port-channel"),
-    ("Se",  "Serial"),
-    ("Lo",  "Loopback"),
-]
-
-
-def _expand_port(abbrev: str) -> str:
-    """Expand a Cisco abbreviated interface name to its full form."""
-    for short, long_ in _PORT_PREFIXES:
-        if abbrev.startswith(short) and not abbrev[len(short):len(short) + 1].isalpha():
-            return long_ + abbrev[len(short):]
-    return abbrev
 
 
 def get_cdp_neighbors(conn) -> list[Neighbor]:
@@ -153,7 +125,6 @@ def get_lldp_neighbors_aoscx(conn) -> list[Neighbor]:
             col_portd = header.index("PORT-DESC")
         except ValueError:
             col_portd = len(header)
-        col_ttl     = header.index("TTL")
         col_name    = header.index("SYS-NAME")
     except ValueError:
         return neighbors
@@ -252,7 +223,7 @@ def _try_connect(ip: str, device_type: str, creds_sets: list[dict]):
     immediately.  Returns ``(connection, used_fallback)`` on the first success,
     or re-raises the last authentication exception if all sets are exhausted.
     """
-    last_exc = None
+    last_exc: NetmikoAuthenticationException | None = None
     for idx, creds in enumerate(creds_sets):
         try:
             conn = connect(
@@ -266,6 +237,7 @@ def _try_connect(ip: str, device_type: str, creds_sets: list[dict]):
             return conn, idx > 0
         except NetmikoAuthenticationException as exc:
             last_exc = exc
+    assert last_exc is not None, "_try_connect called with empty credentials list"
     raise last_exc
 
 
@@ -276,8 +248,8 @@ def discover(
     use_hint_for_all: bool = False,
     extra_creds: list[dict] = None,
     timeout_seconds: int = None,
-    on_device_found: callable = None,
-    on_device_failed: callable = None,
+    on_device_found: Callable[[str, str, int], None] | None = None,
+    on_device_failed: Callable[[str, str], None] | None = None,
 ) -> dict[str, Device]:
     """
     Recursively discover the network topology starting from seed_ip.
@@ -308,7 +280,7 @@ def discover(
     devices: dict[str, Device] = {}
     # Queue entries: (ip, depth, device_type_or_None)
     # device_type_or_None is None for neighbors that need auto-detection.
-    queue: list[tuple[str, int, str | None]] = [(seed_ip, 0, creds["device_type"])]
+    queue: deque[tuple[str, int, str | None]] = deque([(seed_ip, 0, creds["device_type"])])
     # Cache auto-detected types so we don't probe the same IP twice.
     detected_types: dict[str, str] = {}
 
@@ -339,7 +311,7 @@ def discover(
         task = progress.add_task("Starting discovery...", total=None)
 
         while queue:
-            ip, depth, queued_type = queue.pop(0)
+            ip, depth, queued_type = queue.popleft()
             if ip in visited_ips:
                 continue
             if max_depth is not None and depth > max_depth:

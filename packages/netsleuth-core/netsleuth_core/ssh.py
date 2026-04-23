@@ -144,9 +144,9 @@ def get_hostname(conn) -> str:
     elif "arista_eos" in device_type:
         try:
             output = conn.send_command("show hostname")
-            first_line = output.strip().splitlines()[0].strip()
-            if first_line:
-                return first_line
+            lines = output.strip().splitlines()
+            if lines and lines[0].strip():
+                return lines[0].strip()
         except Exception:
             pass
 

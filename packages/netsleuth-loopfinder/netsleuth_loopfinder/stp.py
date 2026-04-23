@@ -3,8 +3,11 @@ Collect STP port states from switches to check if loops are already being blocke
 """
 
 import re
+from rich.console import Console
+from netsleuth_core.ports import expand_port as _expand_port
 from netsleuth_core.ssh import connect, detect_device_type
 
+console = Console()
 
 # Maps raw STP state tokens to normalised abbreviations.
 _STATE_MAP = {
@@ -35,28 +38,6 @@ _VERBOSE_LINE_RE = re.compile(
     r"Port\s+\S+\s+\((?P<port>\S+)\).*?is\s+(?P<state>Forwarding|Blocking|Listening|Learning|Disabled)",
     re.IGNORECASE,
 )
-
-# Cisco IOS abbreviation prefix expansion table (longest-match first).
-_PORT_PREFIXES = [
-    ("Gi",  "GigabitEthernet"),
-    ("Fa",  "FastEthernet"),
-    ("Te",  "TenGigabitEthernet"),
-    ("Tw",  "TwoGigabitEthernet"),
-    ("Hu",  "HundredGigE"),
-    ("Fo",  "FortyGigabitEthernet"),
-    ("Et",  "Ethernet"),
-    ("Po",  "Port-channel"),
-    ("Se",  "Serial"),
-    ("Lo",  "Loopback"),
-]
-
-
-def _expand_port(abbrev: str) -> str:
-    """Expand a Cisco abbreviated interface name to its full form."""
-    for short, long_ in _PORT_PREFIXES:
-        if abbrev.startswith(short) and not abbrev[len(short):len(short)+1].isalpha():
-            return long_ + abbrev[len(short):]
-    return abbrev
 
 
 def _parse_stp_output_juniper(output: str) -> dict[str, str]:
@@ -164,9 +145,6 @@ def get_stp_status(devices: dict, creds: dict) -> dict[str, dict[str, str]]:
         {hostname: {full_port_name: state_abbrev}}
         e.g. {"SW1": {"GigabitEthernet0/1": "FWD", "GigabitEthernet0/2": "BLK"}}
     """
-    from rich.console import Console
-    console = Console()
-
     result: dict[str, dict[str, str]] = {}
 
     for hostname, device in devices.items():

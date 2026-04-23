@@ -12,6 +12,7 @@ Indicators checked:
 import re
 from dataclasses import dataclass, field
 from rich.console import Console
+from netsleuth_core.ports import expand_port as _expand_port
 
 console = Console()
 
@@ -71,20 +72,6 @@ _BPDU_RE = re.compile(
 # %SPANTREE-5-TOPOTRAP: Topology Change Trap ...  (many in a short burst = loop churning STP)
 _TCN_RE = re.compile(r"SPANTREE-\d+-TOPOTRAP|SPANTREE.*?Topology Change", re.IGNORECASE)
 
-
-def _expand_port(abbrev: str) -> str:
-    """Expand Cisco abbreviated port names to full form."""
-    prefixes = [
-        ("Gi", "GigabitEthernet"),
-        ("Fa", "FastEthernet"),
-        ("Te", "TenGigabitEthernet"),
-        ("Et", "Ethernet"),
-        ("Po", "Port-channel"),
-    ]
-    for short, long_ in prefixes:
-        if abbrev.startswith(short) and not abbrev[len(short):len(short) + 1].isalpha():
-            return long_ + abbrev[len(short):]
-    return abbrev
 
 
 def parse_logs(log_output: str) -> LogFindings:

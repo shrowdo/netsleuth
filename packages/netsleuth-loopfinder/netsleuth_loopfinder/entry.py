@@ -250,7 +250,7 @@ def main():
         if not args.username:
             args.username = input("Username: ").strip()
         if not args.password and not args.key_file:
-            args.password = getpass.getpass("Password: ")
+            args.password = os.environ.get("NETSLEUTH_PASSWORD") or getpass.getpass("Password: ")
 
     # Parse --extra-creds "user:pass" tokens into dicts (CLI path).
     # In interactive mode args.extra_creds is already a list[dict] or None.
