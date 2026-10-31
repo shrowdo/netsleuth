@@ -62,7 +62,7 @@ def parse_procurve_port_list(output: str) -> list[str]:
     """Ports that are up, from AOS-S "show interfaces brief"."""
     ports = []
     for line in output.splitlines():
-        m = re.match(r"^\s*(\S+)\s+(?:\S+\s+)?\|\s+(?:Yes|No)\s+(?:Yes|No)\s+Up", line)
+        m = re.match(r"^\s*(\S+)\s+(?:\S+\s+)?\|\s+(?:Yes|No)\s+(?:Yes|No)\s+Up(?!\w)", line)
         if m:
             ports.append(m.group(1))
     return ports

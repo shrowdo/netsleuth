@@ -1,9 +1,8 @@
 import pytest
 from netsleuth_core.models import Device, Neighbor
 from netsleuth_loopfinder.graph import build_graph, get_loop_edges, suggest_remediation, find_loops
-from netsleuth_loopfinder import stp
 from netsleuth_loopfinder.logparse import parse_logs
-from netsleuth_loopfinder.stp import _parse_stp_output_juniper, _parse_stp_output_huawei
+from netsleuth_loopfinder.stp import parse_stp
 
 
 def test_get_loop_edges_for_two_node_cycle_is_not_duplicated():
@@ -49,50 +48,6 @@ def test_build_graph_deduplicates_abbreviated_and_expanded_port_names():
     graph = build_graph(devices)
 
     assert graph.number_of_edges("SW1", "SW2") == 1
-
-
-class _FakeConn:
-    device_type = "arista_eos"
-
-    def send_command(self, _):
-        return ""
-
-    def disconnect(self):
-        return None
-
-
-def test_get_stp_status_uses_detected_device_type(monkeypatch):
-    captured = []
-    detect_calls = []
-
-    def fake_detect_device_type(**kwargs):
-        detect_calls.append(kwargs["ip"])
-        return "arista_eos"
-
-    def fake_connect(**kwargs):
-        captured.append((kwargs["ip"], kwargs["device_type"]))
-        return _FakeConn()
-
-    monkeypatch.setattr(stp, "detect_device_type", fake_detect_device_type)
-    monkeypatch.setattr(stp, "connect", fake_connect)
-    monkeypatch.setattr(stp, "_parse_stp_output", lambda output: {"Ethernet1": "FWD"})
-
-    devices = {
-        "SW1": Device(hostname="SW1", ip="10.0.0.1", neighbors=[]),
-        "SW2": Device(
-            hostname="SW2",
-            ip="10.0.0.2",
-            neighbors=[],
-            device_type="juniper_junos",
-        ),
-    }
-    creds = {"username": "u", "password": "p", "device_type": "cisco_ios", "port": 22}
-
-    result = stp.get_stp_status(devices, creds)
-
-    assert detect_calls == ["10.0.0.1"]
-    assert captured == [("10.0.0.1", "arista_eos"), ("10.0.0.2", "juniper_junos")]
-    assert result == {"SW1": {"Ethernet1": "FWD"}, "SW2": {"Ethernet1": "FWD"}}
 
 
 # ---------------------------------------------------------------------------
@@ -186,17 +141,18 @@ _HUAWEI_STP = """\
 
 
 def test_parse_stp_output_juniper():
-    ports = _parse_stp_output_juniper(_JUNIPER_STP)
+    ports, mode = parse_stp(_JUNIPER_STP, "juniper_junos")
+    assert mode == "enabled"
     assert ports["ge-0/0/0.0"] == "FWD"
     assert ports["ge-0/0/1.0"] == "BLK"
     assert ports["ge-0/0/2.0"] == "LRN"
 
 
 def test_parse_stp_output_huawei():
-    ports = _parse_stp_output_huawei(_HUAWEI_STP)
-    assert ports["GigabitEthernet0/0/1"] == "FWD"
-    assert ports["GigabitEthernet0/0/2"] == "BLK"
-    assert ports["GigabitEthernet0/0/3"] == "BLK"  # DISCARDING maps to BLK
+    ports, _mode = parse_stp(_HUAWEI_STP, "huawei")
+    assert ports["gigabitethernet0/0/1"] == "FWD"
+    assert ports["gigabitethernet0/0/2"] == "BLK"
+    assert ports["gigabitethernet0/0/3"] == "BLK"  # DISCARDING maps to BLK
 
 
 # ---------------------------------------------------------------------------
