@@ -161,9 +161,20 @@ def open_device(
         except Exception as exc:
             log(f"[dim]  {ip}: {device_type_hint} driver failed ({type(exc).__name__}), trying detection[/dim]")
 
-    if not tcp_reachable(ip, primary.get("port", 22)):
+    banner = ssh_banner(ip, primary.get("port", 22))
+    if banner is None:
         raise ConnectionError(f"{ip} is not answering on TCP port {primary.get('port', 22)}")
 
+    # Guess from the SSH banner, then confirm with "show version". Much faster
+    # than SSHDetect, which can take minutes trying every vendor's commands.
+    first = _banner_hint(banner)
+    order = [first] + [t for t in FALLBACK_TYPES if t != first] if first else list(FALLBACK_TYPES)
+    try:
+        return _try_types(order, verify=True)
+    except NetmikoAuthenticationException:
+        raise
+    except Exception as exc:
+        log(f"[dim]  {ip}: quick detection failed ({type(exc).__name__}), trying full autodetect[/dim]")
     detected = detect_device_type(
         ip, primary.get("port", 22), primary["username"],
         primary.get("password", ""), primary.get("key_file"),
@@ -171,7 +182,33 @@ def open_device(
     if detected:
         log(f"[dim]  {ip}: detected {detected}[/dim]")
         return _try_types([detected], verify=False)
-    return _try_types(FALLBACK_TYPES, verify=True)
+    raise ConnectionError(f"Couldn't identify the switch type at {ip} - pick it manually (--device-type)")
+
+
+def ssh_banner(ip: str, port: int = 22, timeout: float = 5.0) -> str | None:
+    """The SSH server banner ("SSH-2.0-Cisco-1.25"), "" if none, None if the port is closed."""
+    try:
+        with socket.create_connection((ip, port), timeout=timeout) as sock:
+            sock.settimeout(3)
+            try:
+                return sock.recv(256).decode("utf-8", errors="replace").strip()
+            except OSError:
+                return ""
+    except OSError:
+        return None
+
+
+def _banner_hint(banner: str) -> str:
+    b = banner.lower()
+    if "cisco" in b:
+        return "cisco_ios"
+    if "mocana" in b or "procurve" in b or "hp" in b.split("-")[-1:]:
+        return "hp_procurve"
+    if "arista" in b:
+        return "arista_eos"
+    if "huawei" in b or "hua" in b:
+        return "huawei"
+    return ""
 
 
 def get_hostname(conn) -> str:

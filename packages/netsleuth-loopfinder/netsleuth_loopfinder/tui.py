@@ -77,11 +77,10 @@ def demo_topology_path() -> str:
     path = _resolve_path(DEMO_TOPOLOGY)
     if os.path.exists(path):
         return path
-    for parent in Path(__file__).resolve().parents:
-        candidate = parent / DEMO_TOPOLOGY
-        if candidate.exists():
-            return str(candidate)
-    return path
+    from netsleuth_loopfinder.mock import _bundled_dir
+
+    bundled = os.path.join(_bundled_dir(), os.path.basename(DEMO_TOPOLOGY))
+    return bundled if os.path.exists(bundled) else path
 
 
 def _markup(msg) -> Text:
@@ -585,7 +584,7 @@ def _topology_renderable(result):
     from netsleuth_loopfinder.cli import build_topology_tree
 
     seed_name = next((n for n, d in result.devices.items() if d.ip == result.seed), None)
-    return build_topology_tree(G, [l.nodes for l in result.loops], seed_name)
+    return build_topology_tree(G, [l.nodes for l in result.loops if l.status != "blocked"], seed_name)
 
 
 class ResultsScreen(Screen):

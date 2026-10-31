@@ -194,3 +194,16 @@ Gi1/0/48            Desg FWD 4         128.48   P2p
     hot = {(h["device"], h["port"]): h for h in result.hot_ports}
     assert hot[("HP-ACCESS", "14")]["uplink"] is False
     assert any("Broadcast storm entering HP-ACCESS 14" in f.title for f in result.findings)
+
+
+def test_mac_flap_names_the_edge_port():
+    from netsleuth_loopfinder.logparse import parse_logs
+
+    a = _dev("A", "1.1.1.1", [_n("B", "Gi0/1", "Gi0/1", "1.1.1.2")], stp={"Gi0/1": "FWD"})
+    a.device_type = "cisco_ios"
+    a.log_findings = parse_logs(
+        "%SW_MATM-4-MACFLAP_NOTIF: Host 0011.2233.4455 in vlan 10 is flapping between port Gi0/7 and port Gi0/1\n")
+    b = _dev("B", "1.1.1.2", [_n("A", "Gi0/1", "Gi0/1", "1.1.1.1")], stp={"Gi0/1": "FWD"})
+    result = analyse({"A": a, "B": b})
+    action = next(x for x in result.actions if x.commands)
+    assert action.device == "A" and "interface GigabitEthernet0/7" in action.commands

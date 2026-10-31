@@ -10,43 +10,52 @@ All-in-one network engineering toolkit. Monorepo with individually-installable p
 ## Monorepo structure
 ```
 packages/
-  netsleuth-core/        # Shared: SSH connection, Device/Neighbor models, Rich console
-  netsleuth-loopfinder/  # Standalone loop detection tool (depends on netsleuth-core)
-  netsleuth/             # Meta-package: CLI dispatcher + Textual TUI (depends on all tools)
-loop_finder/             # LEGACY — kept for reference, superseded by packages/
+  netsleuth-core/        # Shared: SSH (connect/detect), Device/Neighbor models, port + platform helpers
+  netsleuth-loopfinder/  # Loop / broadcast-storm finder (depends on netsleuth-core)
+    netsleuth_loopfinder/
+      analysis.py        # Pipeline: run_scan / run_mock / run_replay -> AnalysisResult (verdict, findings, actions)
+      discovery.py       # Parallel CDP/LLDP crawl, switches only (phones/APs are leaves, never SSH'd)
+      collect.py         # Everything gathered per switch in one session; records raw output for --replay
+      neighbors.py stp.py counters.py logparse.py   # Pure text parsers per vendor (Cisco, ProCurve/AOS-S, AOS-CX, Huawei, Juniper)
+      graph.py           # Graph build (IP-based identity, LAG collapse), loops, STP evaluation at both ends
+      listen.py          # Passive no-login mode (needs Npcap on Windows)
+      cli.py tui.py entry.py mock.py scan.py
+      topologies/        # Mock topologies (package data, bundled into the exe)
+    tests/               # Parser tests on realistic output, analysis, fake-SSH-switch integration, TUI pilot tests
+  netsleuth/             # Meta-package: CLI dispatcher + menu TUI (runs loop-finder screens in-process)
+loop_finder/             # LEGACY - superseded by packages/
 ```
 
-## Installing & running
+## Using it
+```
+loop-finder                                   # TUI
+loop-finder 10.0.0.1 -u admin                 # scan from a seed switch (raw output saved to netsleuth-runs/<time>)
+loop-finder 10.0.0.1 -u admin --extra-creds manager:other
+loop-finder --listen [SECONDS] [--iface NAME|list]   # no login: storm / looping frames / STP / which switch+port
+loop-finder --scan                            # SSH hosts on the local subnet, with banners
+loop-finder --replay netsleuth-runs/<time>    # re-analyse saved output offline (debug parsers with real data)
+loop-finder --mock school_storm.yaml          # demo
+```
+Exit code: 0 all clear, 1 problem found, 2 error. `netsleuth lf ...` takes the same arguments.
 
-### All-in-one
+How loops are judged: every cycle in the CDP/LLDP topology is a *redundant path*. It is only a problem
+if STP isn't blocking it (checked at both ends of every link, per VLAN). Port-channel/trunk/LAG
+members are one logical link. Unmanaged devices are invisible to CDP/LLDP, so storms are also hunted via
+inbound broadcast rates per port, MAC flapping / loop-protect / storm-control logs, STP topology-change
+source ports, ports with several LLDP neighbours, and a switch seeing its own LLDP.
+
+## Testing
 ```bash
-pip install packages/netsleuth packages/netsleuth-core packages/netsleuth-loopfinder
-netsleuth                                        # launches TUI
-netsleuth loopfinder 192.168.1.1 -u admin        # CLI, skip TUI
-netsleuth lf --mock topologies/simple_loop.yaml  # mock mode
+pip install -e packages/netsleuth-core -e packages/netsleuth-loopfinder -e packages/netsleuth pytest
+pytest -q packages
 ```
 
-### Standalone loop finder only
-```bash
-pip install packages/netsleuth-core packages/netsleuth-loopfinder
-loop-finder 192.168.1.1 -u admin
-loop-finder --mock topologies/simple_loop.yaml
+## Building executables (Windows)
+```powershell
+powershell -ExecutionPolicy Bypass -File build.ps1 [-Python path	o\python.exe]
 ```
-
-## Building executables
-
-### All-in-one (netsleuth.exe)
-```bash
-pip install packages/netsleuth packages/netsleuth-core packages/netsleuth-loopfinder
-pyinstaller --onefile --name netsleuth --collect-all netmiko --collect-all rich --collect-all networkx --collect-all textual packages/netsleuth/netsleuth/entry.py
-```
-
-### Standalone loop finder (loop-finder.exe)
-```bash
-pip install packages/netsleuth-core packages/netsleuth-loopfinder
-pyinstaller --onefile --name loop-finder --collect-all netmiko --collect-all rich --collect-all networkx packages/netsleuth-loopfinder/netsleuth_loopfinder/entry.py
-```
-Output in `dist/`. Do NOT commit `dist/` — it's in `.gitignore`.
+Runs the tests, then builds `dist/loop-finder.exe` and `dist/netsleuth.exe` (topologies bundled,
+Textual + scapy collected). Do NOT commit `dist/` - it's in `.gitignore`.
 
 ## Adding a new tool
 1. Create `packages/netsleuth-<toolname>/` with its own `pyproject.toml`

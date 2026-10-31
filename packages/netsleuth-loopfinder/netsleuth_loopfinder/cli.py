@@ -209,7 +209,7 @@ def print_result(result, verbose: bool = False) -> None:
     console.print()
     print_topology(result.graph, show_endpoints=verbose)
     seed_name = next((n for n, d in result.devices.items() if d.ip == result.seed), None)
-    print_topology_diagram(result.graph, [l.nodes for l in result.loops], seed_name)
+    print_topology_diagram(result.graph, [l.nodes for l in result.loops if l.status != "blocked"], seed_name)
     if result.raw_dir:
         console.print(f"\n[dim]Raw switch output saved to {result.raw_dir} "
                       f"(re-analyse offline with: loop-finder --replay \"{result.raw_dir}\")[/dim]")

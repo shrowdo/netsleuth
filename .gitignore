@@ -11,3 +11,5 @@ venv/
 .env
 inventory.yaml
 *.log
+netsleuth-runs/
+build/

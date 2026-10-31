@@ -428,7 +428,24 @@ def analyse(devices: dict[str, Device], seed: str = "", raw_dir: str | None = No
 
     # --- Follow-up actions ----------------------------------------------
     flap_findings = [f for f in findings if f.title.startswith("MAC flapping")]
-    if flap_findings and not active:
+    named_flap_ports: set[tuple[str, str]] = set()
+    if not active:
+        for name, d in devices.items():
+            lf = d.log_findings
+            if not (d.reachable and isinstance(lf, LogFindings)):
+                continue
+            for flap in lf.mac_flaps:
+                edge = [p for p in flap["ports"] if not _is_uplink(d, p)]
+                if len(edge) == 1 and (name, edge[0]) not in named_flap_ports:
+                    named_flap_ports.add((name, edge[0]))
+                    cmds, undo = shutdown_commands(d.device_type, edge[0])
+                    actions.append(Action(
+                        f"MAC addresses are flapping between {' and '.join(flap['ports'])} on {name}. "
+                        f"{edge[0]} is the non-uplink side, so the loop is behind it: shut it and "
+                        "check whether the flapping stops, then trace that cable.",
+                        name, cmds, undo,
+                    ))
+    if flap_findings and not active and not named_flap_ports:
         actions.append(Action(
             "MAC flapping means traffic is looping. For each flapping pair, the port that is NOT an "
             "uplink leads to the loop; shut it (or unplug it) and watch whether the flapping stops.",

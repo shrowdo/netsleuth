@@ -20,3 +20,6 @@ loop-finder = "netsleuth_loopfinder.entry:main"
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["netsleuth_loopfinder*"]
+
+[tool.setuptools.package-data]
+netsleuth_loopfinder = ["topologies/*.yaml"]
