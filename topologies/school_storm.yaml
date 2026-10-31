@@ -1,0 +1,55 @@
+# school_storm.yaml - A typical school network during a broadcast storm.
+#
+#            CORE (Cisco)
+#     Po1 //    |    \\ Po2        <- LACP uplinks (2 cables each, NOT loops)
+#   ACCESS-1    |    ACCESS-2
+#        \______|______/           <- ACCESS-1 <-> ACCESS-2 cross link (redundant,
+#                                     correctly blocked by STP)
+#
+#   ACCESS-2 ports 14 and 22 are joined by a patch lead between two wall ports
+#   in a classroom: the switch sees its own LLDP, STP is off on that switch, so
+#   the loop forwards and floods the whole network.
+#   A phone on ACCESS-1 port 5 is an endpoint and isn't crawled.
+
+devices:
+  CORE:
+    ip: 10.0.0.1
+    device_type: cisco_ios
+    lags: {Gi1/0/49: Po1, Gi1/0/50: Po1, Gi1/0/51: Po2, Gi1/0/52: Po2}
+    stp: {Po1: FWD, Po2: FWD}
+    rates: {Po1: 900, Po2: 14800}
+    neighbors:
+      - {hostname: ACCESS-1, local_port: Gi1/0/49, remote_port: "49", ip: 10.0.0.11}
+      - {hostname: ACCESS-1, local_port: Gi1/0/50, remote_port: "50", ip: 10.0.0.11}
+      - {hostname: ACCESS-2, local_port: Gi1/0/51, remote_port: "49", ip: 10.0.0.12}
+      - {hostname: ACCESS-2, local_port: Gi1/0/52, remote_port: "50", ip: 10.0.0.12}
+
+  ACCESS-1:
+    ip: 10.0.0.11
+    device_type: hp_procurve
+    lags: {"49": Trk1, "50": Trk1}
+    stp: {Trk1: FWD, "48": BLK, "5": FWD}
+    rates: {Trk1: 14500, "5": 12}
+    neighbors:
+      - {hostname: CORE, local_port: "49", remote_port: Gi1/0/49, ip: 10.0.0.1}
+      - {hostname: CORE, local_port: "50", remote_port: Gi1/0/50, ip: 10.0.0.1}
+      - {hostname: ACCESS-2, local_port: "48", remote_port: "48", ip: 10.0.0.12}
+      - {hostname: SEP001122334455, local_port: "5", remote_port: Port 1, role: endpoint, capabilities: "B,T"}
+    logs: |
+      I 10/31/26 07:58:01 00435 ports: port 5 is now on-line
+
+  ACCESS-2:
+    ip: 10.0.0.12
+    device_type: hp_procurve
+    stp_mode: disabled
+    lags: {"49": Trk1, "50": Trk1}
+    rates: {Trk1: 2100, "14": 15200, "22": 15150, "3": 40}
+    neighbors:
+      - {hostname: CORE, local_port: "49", remote_port: Gi1/0/51, ip: 10.0.0.1}
+      - {hostname: CORE, local_port: "50", remote_port: Gi1/0/52, ip: 10.0.0.1}
+      - {hostname: ACCESS-1, local_port: "48", remote_port: "48", ip: 10.0.0.11}
+      - {hostname: ACCESS-2, local_port: "14", remote_port: "22", ip: 10.0.0.12}
+      - {hostname: ACCESS-2, local_port: "22", remote_port: "14", ip: 10.0.0.12}
+    logs: |
+      W 10/31/26 07:59:12 00332 FFI: port 14-Excessive Broadcasts. See help.
+      W 10/31/26 07:59:13 00332 FFI: port 22-Excessive Broadcasts. See help.

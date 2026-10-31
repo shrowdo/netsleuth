@@ -1,266 +1,206 @@
 """
-Collect STP port states from switches to check if loops are already being blocked.
+Parse spanning-tree state, link aggregation membership and topology-change
+history from switch output.
 """
 
 import re
-from rich.console import Console
-from netsleuth_core.ports import expand_port as _expand_port
-from netsleuth_core.ssh import connect, detect_device_type
 
-console = Console()
+from netsleuth_core.ports import canonical_port, expand_port
 
-# Maps raw STP state tokens to normalised abbreviations.
+# Raw state token -> normalised state. Discarding/broken ports don't forward.
 _STATE_MAP = {
-    "forwarding": "FWD",
-    "fwd":        "FWD",
-    "blocking":   "BLK",
-    "blk":        "BLK",
-    "listening":  "LIS",
-    "lis":        "LIS",
-    "learning":   "LRN",
-    "lrn":        "LRN",
-    "disabled":   "DIS",
-    "dis":        "DIS",
+    "fwd": "FWD", "forwarding": "FWD",
+    "blk": "BLK", "blocking": "BLK", "discarding": "BLK", "bkn": "BLK", "broken": "BLK",
+    "lis": "LIS", "listening": "LIS",
+    "lrn": "LRN", "learning": "LRN",
+    "dis": "DIS", "disabled": "DIS", "down": "DIS",
 }
 
-# Cisco IOS "show spanning-tree" output has lines like:
-#   Gi0/1             128.1    P2p      Desg FWD
-#   Gi0/2             128.2    P2p      Root BLK
-# The port name can be abbreviated (Gi, Fa, Te, …) or full.
-_PORT_LINE_RE = re.compile(
-    r"^(?P<port>\S+)\s+\S+\s+\S+\s+\S+\s+(?P<state>FWD|BLK|LIS|LRN|DIS|"
-    r"Forwarding|Blocking|Listening|Learning|Disabled)\s*$",
+# Matches a port row in any vendor's "show spanning-tree" table, whatever
+# column the state is in. Cisco IOS:  "Gi1/0/1   Desg FWD 4  128.1  P2p"
+# ProCurve: "49  SFP+SR  2000  128  Alternate  Blocking  001b3f-5c2e00"
+# AOS-CX:   "1/1/49  Root  Forwarding  20000  128  P2P  0"
+_ROW_RE = re.compile(
+    r"^\s*(?P<port>[A-Za-z]*[\w/.:-]*\d[\w/.:-]*)\s+.*?"
+    r"(?<![\w-])(?P<state>FWD|BLK|BKN\*?|LIS|LRN|Forwarding|Blocking|Discarding|Broken|Listening|Learning)(?![\w-])",
     re.IGNORECASE | re.MULTILINE,
 )
 
-# Fallback pattern for "Port X (GigabitEthernetY) of VLAN... is Forwarding"
-_VERBOSE_LINE_RE = re.compile(
-    r"Port\s+\S+\s+\((?P<port>\S+)\).*?is\s+(?P<state>Forwarding|Blocking|Listening|Learning|Disabled)",
+_HUAWEI_ROW_RE = re.compile(
+    r"^\s*\d+\s+(?P<port>\S+)\s+\S+\s+(?P<state>FORWARDING|DISCARDING|LEARNING|BLOCKING)\b",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+_STP_OFF_RE = re.compile(
+    r"No spanning tree instance|spanning[- ]tree is disabled|"
+    r"STP Enabled\s*:\s*No|Spanning Tree (?:Status|Enabled)\s*:\s*(?:Disabled|No)|"
+    r"Protocol Status\s*:\s*Disabled|STP is disabled|spanning tree protocol is disabled",
     re.IGNORECASE,
 )
 
-
-def _parse_stp_output_juniper(output: str) -> dict[str, str]:
-    """
-    Parse Juniper ``show spanning-tree interface`` output.
-
-    Example lines::
-
-        ge-0/0/0.0     Forwarding  Designated
-        ge-0/0/1.0     Blocking    Root
-    """
-    ports: dict[str, str] = {}
-    pattern = re.compile(
-        r"^(?P<port>\S+)\s+(?P<state>Forwarding|Blocking|Learning|Listening|Discarding)\s+",
-        re.IGNORECASE | re.MULTILINE,
-    )
-    for m in pattern.finditer(output):
-        port = m.group("port")
-        state = _STATE_MAP.get(m.group("state").lower(), m.group("state").upper())
-        ports[port] = state
-    return ports
+_SKIP_PORT_TOKENS = {"port", "interface", "vlan", "mst", "cist", "instance", "root", "bridge"}
 
 
-def _parse_stp_output_huawei(output: str) -> dict[str, str]:
-    """
-    Parse Huawei ``display stp brief`` output.
-
-    Example lines::
-
-      0    GigabitEthernet0/0/1   ROOT   FORWARDING  NONE
-      0    GigabitEthernet0/0/2   DESI   FORWARDING  NONE
-    """
-    _huawei_state_map = {
-        "FORWARDING": "FWD",
-        "BLOCKING":   "BLK",
-        "LEARNING":   "LRN",
-        "DISCARDING": "BLK",  # Huawei RSTP uses DISCARDING instead of BLOCKING
-    }
-    ports: dict[str, str] = {}
-    pattern = re.compile(
-        r"^\s*\d+\s+(?P<port>\S+)\s+\S+\s+(?P<state>FORWARDING|BLOCKING|LEARNING|DISCARDING)\s+",
-        re.IGNORECASE | re.MULTILINE,
-    )
-    for m in pattern.finditer(output):
-        port = m.group("port")
-        state = _huawei_state_map.get(m.group("state").upper(), m.group("state").upper())
-        ports[port] = state
-    return ports
-
-
-def _get_stp_output(conn) -> str:
-    """
-    Issue the appropriate STP command for the connected device and return raw output.
-    Returns an empty string if the command fails.
-    """
-    device_type: str = getattr(conn, "device_type", "") or ""
-
-    # Huawei VRP
-    if any(dt in device_type for dt in ("huawei_vrp", "huawei_vrpv8")):
-        try:
-            return conn.send_command("display stp brief")
-        except Exception:
-            return ""
-
-    # Juniper JunOS
-    if "juniper" in device_type:
-        try:
-            return conn.send_command("show spanning-tree interface")
-        except Exception:
-            return ""
-
-    # Cisco IOS/XE/NX-OS, Arista EOS, HP ProCurve / Aruba, AOS-CX — standard command
-    try:
-        return conn.send_command("show spanning-tree")
-    except Exception:
+def _merge(states: set[str]) -> str:
+    """Merge one port's states across VLANs/instances."""
+    if not states:
         return ""
+    if states == {"BLK"}:
+        return "BLK"
+    if "BLK" in states:
+        return "PART"  # blocked in some VLANs, forwarding in others
+    if "FWD" in states:
+        return "FWD"
+    return sorted(states)[0]
 
 
-def _parse_stp_output(output: str) -> dict[str, str]:
+def parse_stp(output: str, device_type: str = "") -> tuple[dict[str, str], str]:
     """
-    Parse ``show spanning-tree`` output and return {full_port_name: state_abbrev}.
+    Return ({canonical_port: state}, mode) where mode is "enabled",
+    "disabled" or "unknown".
     """
-    ports: dict[str, str] = {}
+    if not output or not output.strip():
+        return {}, "unknown"
+    if _STP_OFF_RE.search(output):
+        return {}, "disabled"
 
-    for m in _PORT_LINE_RE.finditer(output):
-        port = _expand_port(m.group("port"))
-        state = _STATE_MAP.get(m.group("state").lower(), m.group("state").upper())
-        ports[port] = state
+    pattern = _HUAWEI_ROW_RE if device_type.startswith("huawei") else _ROW_RE
+    seen: dict[str, set[str]] = {}
+    for m in pattern.finditer(output):
+        port = m.group("port")
+        if port.lower() in _SKIP_PORT_TOKENS or port.lower().startswith("vlan"):
+            continue
+        state = _STATE_MAP.get(m.group("state").lower().rstrip("*"), m.group("state").upper())
+        seen.setdefault(canonical_port(port), set()).add(state)
 
-    # If the tabular pattern found nothing, try the verbose pattern.
-    if not ports:
-        for m in _VERBOSE_LINE_RE.finditer(output):
-            port = _expand_port(m.group("port"))
-            state = _STATE_MAP.get(m.group("state").lower(), m.group("state").upper())
-            ports[port] = state
-
-    return ports
+    ports = {p: _merge(s) for p, s in seen.items()}
+    return ports, ("enabled" if ports else "unknown")
 
 
-def get_stp_status(devices: dict, creds: dict) -> dict[str, dict[str, str]]:
+# ---------------------------------------------------------------------------
+# Topology changes ("who keeps flapping STP?")
+# ---------------------------------------------------------------------------
+
+def _age_seconds(text: str) -> int | None:
+    """Convert Cisco "00:00:03", "1d02h", "2w3d" style ages to seconds."""
+    text = text.strip()
+    m = re.fullmatch(r"(\d+):(\d+):(\d+)", text)
+    if m:
+        h, mi, s = map(int, m.groups())
+        return h * 3600 + mi * 60 + s
+    total = 0
+    found = False
+    for value, unit in re.findall(r"(\d+)([wdhms])", text):
+        found = True
+        total += int(value) * {"w": 604800, "d": 86400, "h": 3600, "m": 60, "s": 1}[unit]
+    return total if found else None
+
+
+def parse_cisco_tcn(output: str) -> list[dict]:
     """
-    SSH into each device and collect per-port STP state.
-
-    Returns:
-        {hostname: {full_port_name: state_abbrev}}
-        e.g. {"SW1": {"GigabitEthernet0/1": "FWD", "GigabitEthernet0/2": "BLK"}}
-    """
-    result: dict[str, dict[str, str]] = {}
-
-    for hostname, device in devices.items():
-        try:
-            console.print(f"[cyan]STP: connecting to {hostname} ({device.ip})…[/cyan]")
-            device_type_hint = device.device_type
-            if not device_type_hint:
-                device_type_hint = detect_device_type(
-                    ip=device.ip,
-                    port=creds.get("port", 22),
-                    username=creds["username"],
-                    password=creds["password"],
-                    key_file=creds.get("key_file"),
-                )
-            conn = connect(
-                ip=device.ip,
-                username=creds["username"],
-                password=creds["password"],
-                device_type=device_type_hint,
-                port=creds.get("port", 22),
-                key_file=creds.get("key_file"),
-            )
-            device_type: str = getattr(conn, "device_type", "") or ""
-            output = _get_stp_output(conn)
-            conn.disconnect()
-
-            # Choose the right parser based on the vendor
-            if any(dt in device_type for dt in ("huawei_vrp", "huawei_vrpv8")):
-                ports = _parse_stp_output_huawei(output)
-            elif "juniper" in device_type:
-                ports = _parse_stp_output_juniper(output)
-            else:
-                ports = _parse_stp_output(output)
-            result[hostname] = ports
-            console.print(f"[green]  STP data collected: {len(ports)} port(s)[/green]")
-        except Exception as exc:
-            console.print(f"[red]  STP collection failed for {hostname}: {exc}[/red]")
-            result[hostname] = {}
-
-    return result
-
-
-def get_stp_status_mock(devices: dict) -> dict[str, dict[str, str]]:
-    """
-    Return synthetic STP data suitable for mock/demo runs.
-
-    Strategy: for each device the first neighbor port is set to BLK so that
-    at least one loop will appear as "handled by STP" in the demo output.
-    All remaining ports are set to FWD.
-    """
-    result: dict[str, dict[str, str]] = {}
-    first_device = True
-
-    for hostname, device in devices.items():
-        ports: dict[str, str] = {}
-        first_port = True
-
-        for neighbor in device.neighbors:
-            port_name = neighbor.local_port or f"GigabitEthernet0/{len(ports)}"
-            if first_device and first_port:
-                ports[port_name] = "BLK"
-                first_port = False
-            else:
-                ports[port_name] = "FWD"
-
-        result[hostname] = ports
-        first_device = False
-
-    return result
-
-
-def check_loops_stp_status(loops: list, loop_edges: list, stp_data: dict) -> list[dict]:
-    """
-    For each loop determine whether any edge port is in Blocking state.
-
-    Args:
-        loops:      List of cycles (each a list of hostnames) from find_loops().
-        loop_edges: Parallel list of edge-lists returned by get_loop_edges() for
-                    each cycle.  Each entry is a list of dicts with keys
-                    "from", "to", "local_port", "remote_port".
-        stp_data:   {hostname: {port: state}} from get_stp_status[_mock]().
-
-    Returns:
-        List of dicts, one per loop:
-        {
-            "loop_index":     int,   # 1-based
-            "blocked":        bool,
-            "blocking_port":  str,   # empty string when not blocked
-            "blocking_device": str,  # empty string when not blocked
-        }
+    Parse "show spanning-tree detail" for each instance's topology-change
+    count, how long ago the last one happened and which port it came from.
+    Following "from_port" switch by switch leads to the source of the churn.
     """
     results = []
-
-    for i, edges in enumerate(loop_edges, start=1):
-        blocked = False
-        blocking_port = ""
-        blocking_device = ""
-
-        for edge in edges:
-            device_name = edge["from"]
-            local_port = edge["local_port"]
-
-            device_stp = stp_data.get(device_name, {})
-            state = device_stp.get(local_port, "")
-
-            if state == "BLK":
-                blocked = True
-                blocking_port = local_port
-                blocking_device = device_name
-                break
-
+    blocks = re.split(r"(?=^\s*(?:VLAN|MST|Instance)\S*\s+is executing)", output, flags=re.M | re.I)
+    for block in blocks:
+        inst_m = re.match(r"\s*(\S+)\s+is executing", block, re.I)
+        count_m = re.search(r"Number of topology changes\s+(\d+)\s+last change occurred\s+(\S+)\s+ago", block, re.I)
+        if not (inst_m and count_m):
+            continue
+        from_m = re.search(r"last change occurred\s+\S+\s+ago\s*\n?\s*from\s+(\S+)", block, re.I)
         results.append({
-            "loop_index": i,
-            "blocked": blocked,
-            "blocking_port": blocking_port,
-            "blocking_device": blocking_device,
+            "instance": inst_m.group(1),
+            "count": int(count_m.group(1)),
+            "age_s": _age_seconds(count_m.group(2)),
+            "from_port": expand_port(from_m.group(1)) if from_m else "",
         })
-
     return results
+
+
+def parse_procurve_tcn(output: str) -> list[dict]:
+    """AOS-S / AOS-CX "show spanning-tree" topology change counters."""
+    count_m = re.search(r"Topology Change Count\s*:\s*(\d+)", output, re.I)
+    if not count_m:
+        return []
+    age_m = re.search(r"Time Since Last Change\s*:\s*([^\n]+)", output, re.I)
+    age = None
+    if age_m:
+        raw = age_m.group(1).strip().lower()
+        num = re.match(r"(\d+)\s*(sec|min|hour|day)", raw)
+        if num:
+            mult = {"sec": 1, "min": 60, "hour": 3600, "day": 86400}[num.group(2)]
+            age = int(num.group(1)) * mult
+        else:
+            age = _age_seconds(raw)
+    return [{"instance": "CST", "count": int(count_m.group(1)), "age_s": age, "from_port": ""}]
+
+
+# ---------------------------------------------------------------------------
+# Link aggregation
+# ---------------------------------------------------------------------------
+
+_MEMBER_TOKEN_RE = re.compile(r"([A-Za-z][A-Za-z\-]*\d[\w/.:]*)\((\w+\+?)\)")
+
+
+def parse_cisco_lags(output: str) -> dict[str, str]:
+    """
+    Cisco "show etherchannel summary", NX-OS / Arista "show port-channel
+    summary". Returns {canonical_member: "Po1"}.
+    """
+    lags: dict[str, str] = {}
+    current = ""
+    for line in output.splitlines():
+        tokens = _MEMBER_TOKEN_RE.findall(line)
+        if not tokens:
+            continue
+        names = [t[0] for t in tokens]
+        if re.match(r"^\s*\d+\s+", line) and names[0].lower().startswith("po"):
+            current = names[0]
+            members = names[1:]
+        elif line.startswith((" ", "\t")) and current:
+            members = names
+        else:
+            continue
+        for member in members:
+            if member.upper().startswith("LACP") or member.lower().startswith("po"):
+                continue
+            lags[canonical_port(member)] = current
+    return lags
+
+
+def parse_procurve_trunks(output: str) -> dict[str, str]:
+    """AOS-S "show trunks": "  49  | ...  | Trk1   LACP"."""
+    lags: dict[str, str] = {}
+    for m in re.finditer(r"^\s*(\S+)\s+\|.*\|\s*((?:Trk|Dyn)\d+)\b", output, re.M):
+        lags[canonical_port(m.group(1))] = m.group(2)
+    return lags
+
+
+def parse_aoscx_lags(output: str) -> dict[str, str]:
+    """AOS-CX "show lacp interfaces" / "show lag": "1/1/49  lag1 ..."."""
+    lags: dict[str, str] = {}
+    for m in re.finditer(r"^\s*(\d+/\d+/\d+)\s+(lag\d+)\b", output, re.M | re.I):
+        lags[canonical_port(m.group(1))] = m.group(2)
+    # "show lag" detail form: "Aggregate lag1 ... Interfaces : 1/1/49 1/1/50"
+    for block in re.split(r"(?=^\s*Aggregate\s+lag\d+)", output, flags=re.M | re.I):
+        name_m = re.match(r"\s*Aggregate\s+(lag\d+)", block, re.I)
+        members_m = re.search(r"(?:Interfaces|Aggregated-interfaces)\s*:\s*([^\n]+)", block, re.I)
+        if name_m and members_m:
+            for port in re.findall(r"\d+/\d+/\d+", members_m.group(1)):
+                lags[canonical_port(port)] = name_m.group(1)
+    return lags
+
+
+# ---------------------------------------------------------------------------
+# Loop evaluation helpers
+# ---------------------------------------------------------------------------
+
+def port_state(stp: dict[str, str], stp_mode: str, port: str) -> str:
+    """STP state for *port* ("" if unknown). With STP off every port forwards."""
+    if stp_mode == "disabled":
+        return "FWD"
+    if not port:
+        return ""
+    return stp.get(canonical_port(port), "")

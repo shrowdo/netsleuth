@@ -1,143 +1,128 @@
 """
-Network auto-discovery helpers for the loop-finder CLI.
+Local network helpers for picking a seed switch.
 
-Provides:
-  get_local_subnets()          — find local IPv4 /24 subnets
-  scan_subnet_for_ssh()        — TCP-probe every host in a subnet for port 22
+  get_local_subnets()     - this machine's IPv4 subnets (real netmasks where possible)
+  scan_subnet_for_ssh()   - find hosts with SSH open, optionally with their SSH banner
 """
 
 import ipaddress
+import platform
+import re
 import socket
-from concurrent.futures import ThreadPoolExecutor, as_completed
+import subprocess
+from concurrent.futures import ThreadPoolExecutor
+
+# Never sweep more than this many addresses per subnet.
+MAX_PREFIX = 22
+
+
+def _windows_subnets() -> list[tuple[str, str]]:
+    """(ip, netmask) pairs from ipconfig, including adapters without a gateway."""
+    try:
+        out = subprocess.run(["ipconfig"], capture_output=True, text=True, timeout=10,
+                             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout
+    except Exception:
+        return []
+    pairs = []
+    ip = None
+    for line in out.splitlines():
+        m = re.search(r"IPv4 Address[ .]*:\s*([\d.]+)", line)
+        if m:
+            ip = m.group(1)
+            continue
+        m = re.search(r"Subnet Mask[ .]*:\s*([\d.]+)", line)
+        if m and ip:
+            pairs.append((ip, m.group(1)))
+            ip = None
+    return pairs
+
+
+def _generic_addresses() -> list[tuple[str, str]]:
+    pairs = []
+    try:
+        for info in socket.getaddrinfo(socket.gethostname(), None, socket.AF_INET):
+            pairs.append((info[4][0], "255.255.255.0"))
+    except OSError:
+        pass
+    # The address used for the default route, even when DNS for our own hostname is broken.
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+            s.connect(("10.255.255.255", 1))
+            pairs.append((s.getsockname()[0], "255.255.255.0"))
+    except OSError:
+        pass
+    return pairs
 
 
 def get_local_subnets() -> list[str]:
-    """
-    Return a list of CIDR strings representing local IPv4 subnets.
-
-    Strategy (best-effort, graceful degradation):
-    1. Try ``netifaces`` for per-interface addresses + netmasks.
-    2. Fall back to ``socket.gethostbyname(socket.gethostname())`` with an
-       assumed /24 prefix.
-
-    Loopback (127.x.x.x) and link-local (169.254.x.x) addresses are excluded.
-    """
-    subnets: list[str] = []
-
-    # --- attempt 1: netifaces ---
+    """CIDR strings for this machine's IPv4 subnets (loopback/link-local excluded)."""
+    pairs: list[tuple[str, str]] = []
+    if platform.system() == "Windows":
+        pairs = _windows_subnets()
     try:
         import netifaces  # type: ignore
 
-        AF_INET = netifaces.AF_INET
         for iface in netifaces.interfaces():
-            addrs = netifaces.ifaddresses(iface).get(AF_INET, [])
-            for entry in addrs:
-                addr_str = entry.get("addr", "")
-                netmask = entry.get("netmask", "255.255.255.0")
-                if not addr_str:
-                    continue
-                try:
-                    ip = ipaddress.IPv4Address(addr_str)
-                    if ip.is_loopback or ip.is_link_local:
-                        continue
-                    network = ipaddress.IPv4Network(
-                        f"{addr_str}/{netmask}", strict=False
-                    )
-                    cidr = str(network)
-                    if cidr not in subnets:
-                        subnets.append(cidr)
-                except (ValueError, ipaddress.AddressValueError):
-                    continue
+            for entry in netifaces.ifaddresses(iface).get(netifaces.AF_INET, []):
+                if entry.get("addr"):
+                    pairs.append((entry["addr"], entry.get("netmask", "255.255.255.0")))
     except ImportError:
-        pass  # netifaces not installed — fall through
-
-    if subnets:
-        return subnets
-
-    # --- attempt 2: socket.gethostbyname fallback ---
-    try:
-        hostname = socket.gethostname()
-        primary_ip = socket.gethostbyname(hostname)
-        ip = ipaddress.IPv4Address(primary_ip)
-        if not ip.is_loopback and not ip.is_link_local:
-            network = ipaddress.IPv4Network(f"{primary_ip}/24", strict=False)
-            subnets.append(str(network))
-    except Exception:
         pass
+    if not pairs:
+        pairs = _generic_addresses()
 
+    subnets: list[str] = []
+    for addr, mask in pairs:
+        try:
+            ip = ipaddress.IPv4Address(addr)
+            if ip.is_loopback or ip.is_link_local:
+                continue
+            net = ipaddress.IPv4Network(f"{addr}/{mask}", strict=False)
+            if net.prefixlen < MAX_PREFIX:
+                # Big flat network: sweep just the block around us.
+                net = ipaddress.IPv4Network(f"{addr}/24", strict=False)
+            cidr = str(net)
+            if cidr not in subnets:
+                subnets.append(cidr)
+        except ValueError:
+            continue
     return subnets
+
+
+def _probe(ip: str, port: int, timeout: float, with_banner: bool):
+    try:
+        with socket.create_connection((ip, port), timeout=timeout) as sock:
+            if not with_banner:
+                return ip, ""
+            sock.settimeout(1.5)
+            try:
+                banner = sock.recv(256).decode("utf-8", errors="replace").strip()
+            except OSError:
+                banner = ""
+            return ip, banner.splitlines()[0][:60] if banner else ""
+    except OSError:
+        return None
 
 
 def scan_subnet_for_ssh(
     subnet: str,
     port: int = 22,
-    timeout: float = 0.5,
-    max_workers: int = 50,
-) -> list[str]:
+    timeout: float = 0.6,
+    max_workers: int = 64,
+    with_banner: bool = False,
+):
     """
-    Probe every usable host in *subnet* for an open SSH port.
+    Probe every host in *subnet* for an open SSH port.
 
-    Uses a thread pool for concurrent TCP connections so that a /24 scan
-    completes in a few seconds even on a slow LAN.
-
-    Args:
-        subnet:      CIDR string, e.g. ``"192.168.1.0/24"``.
-        port:        TCP port to probe (default 22).
-        timeout:     Per-host connection timeout in seconds (default 0.5).
-        max_workers: Thread-pool size (default 50).
-
-    Returns:
-        Sorted list of IP address strings that accepted a TCP connection.
+    Returns a sorted list of IP strings, or with ``with_banner=True`` a list of
+    {"ip", "banner"} dicts (the SSH banner often names the vendor, e.g.
+    "SSH-2.0-Cisco-1.25").
     """
-    try:
-        from rich.console import Console
-        from rich.progress import Progress, SpinnerColumn, TextColumn
-
-        _console = Console()
-    except ImportError:  # pragma: no cover
-        _console = None  # type: ignore
-
     network = ipaddress.IPv4Network(subnet, strict=False)
-    # Exclude network address and broadcast address
-    hosts = list(network.hosts())
-
-    found: list[str] = []
-
-    def _probe(ip_str: str) -> str | None:
-        try:
-            with socket.create_connection((ip_str, port), timeout=timeout):
-                return ip_str
-        except OSError:
-            return None
-
-    if _console is not None:
-        progress = Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            console=_console,
-            transient=True,
-        )
-        progress.start()
-        task = progress.add_task(
-            f"Scanning {subnet} for SSH hosts...", total=len(hosts)
-        )
-    else:
-        progress = None  # type: ignore
-        task = None
-
-    try:
-        with ThreadPoolExecutor(max_workers=max_workers) as executor:
-            futures = {executor.submit(_probe, str(h)): h for h in hosts}
-            for future in as_completed(futures):
-                if progress is not None:
-                    progress.advance(task)
-                result = future.result()
-                if result is not None:
-                    found.append(result)
-    finally:
-        if progress is not None:
-            progress.stop()
-
-    # Sort numerically by packed IP address
-    found.sort(key=lambda ip: ipaddress.IPv4Address(ip))
-    return found
+    hosts = [str(h) for h in network.hosts()]
+    with ThreadPoolExecutor(max_workers=max_workers) as pool:
+        results = [r for r in pool.map(lambda h: _probe(h, port, timeout, with_banner), hosts) if r]
+    results.sort(key=lambda r: ipaddress.IPv4Address(r[0]))
+    if with_banner:
+        return [{"ip": ip, "banner": banner} for ip, banner in results]
+    return [ip for ip, _ in results]
