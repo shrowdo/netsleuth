@@ -95,7 +95,10 @@ def print_hot_ports(result, limit: int = 12) -> None:
 
 def print_loop_reports(result) -> None:
     if not result.loops:
-        console.print("[green]No redundant paths between switches.[/green]")
+        if result.coverage_complete:
+            console.print("[green]No redundant paths between switches.[/green]")
+        else:
+            console.print("[yellow]Insufficient topology data to assess redundant paths.[/yellow]")
         return
     for loop in result.loops:
         status = {

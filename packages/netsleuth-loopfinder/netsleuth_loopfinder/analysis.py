@@ -49,6 +49,7 @@ class ScanOptions:
     collect_counters: bool = True
     # Folder to save raw command output in (None = don't save).
     raw_dir: str | None = None
+    proxy_url: str | None = None
 
 
 @dataclass
@@ -100,6 +101,11 @@ class AnalysisResult:
         return [l for l in self.loops if l.status == "active"]
 
     @property
+    def coverage_complete(self) -> bool:
+        return bool(self.devices) and all(d.reachable and not d.collection_warnings
+                                          for d in self.devices.values())
+
+    @property
     def switches(self) -> list[Device]:
         return [d for d in self.devices.values()]
 
@@ -113,6 +119,10 @@ class AnalysisResult:
             return "critical", f"{n} ACTIVE LOOP{'S' if n > 1 else ''} - STP is not blocking {'them' if n > 1 else 'it'}"
         if crit:
             return "critical", crit[0].title
+        if not self.devices or not any(d.reachable for d in self.devices.values()):
+            return "warning", "Assessment incomplete: no switch data collected"
+        if any(not d.reachable or d.collection_warnings for d in self.devices.values()):
+            return "warning", "Assessment incomplete: some switch or topology data is unavailable"
         if warn:
             return "warning", f"No active loop between managed switches, but {len(warn)} warning(s) to check"
         return "ok", "No loop or broadcast storm detected"
@@ -124,6 +134,8 @@ class AnalysisResult:
             "devices": {
                 name: {
                     "ip": d.ip,
+                    "collection_warnings": d.collection_warnings,
+                    "evidence": d.evidence,
                     "alt_ips": d.alt_ips,
                     "reachable": d.reachable,
                     "device_type": d.device_type,
@@ -170,6 +182,18 @@ def run_scan(
     on_device_failed: Callable[[str, str], None] | None = None,
 ) -> AnalysisResult:
     from netsleuth_loopfinder.discovery import discover
+
+    if opts.device_type == "netgear_web":
+        from netsleuth_loopfinder.netgear_web import collect
+        device = collect(opts.seed_ip, opts.password, opts.proxy_url, opts.collect_counters)
+        # Web evidence is parsed JSON, not SSH command records usable by --replay.
+        result = analyse({device.hostname: device}, seed=opts.seed_ip)
+        if opts.raw_dir:
+            os.makedirs(opts.raw_dir, exist_ok=True)
+            result.write_json(os.path.join(opts.raw_dir, "results.json"))
+        return result
+    if opts.proxy_url:
+        raise ValueError("--proxy is currently supported only with --device-type netgear_web")
 
     creds = {
         "username": opts.username,
@@ -322,6 +346,8 @@ def analyse(devices: dict[str, Device], seed: str = "", raw_dir: str | None = No
         if not d.reachable:
             findings.append(Finding("warning", f"Couldn't log into {name}", d.error, name))
             continue
+        for warning in d.collection_warnings:
+            findings.append(Finding("warning", f"Incomplete collection on {name}", warning, name))
         if d.stp_mode == "disabled":
             findings.append(Finding("warning", f"Spanning tree is OFF on {name}",
                                     "Any loop through this switch will not be blocked.", name))
@@ -455,7 +481,13 @@ def analyse(devices: dict[str, Device], seed: str = "", raw_dir: str | None = No
             "Some switches couldn't be reached over SSH. During a storm their CPU may be overloaded; "
             "try again after shutting the suspect port, or use the console cable.",
         ))
-    if not active and not any(f.severity == "critical" for f in findings):
+    incomplete = not devices or any(not d.reachable or d.collection_warnings for d in devices.values())
+    if incomplete and not active:
+        actions.append(Action(
+            "Collect the missing switch and neighbour data before drawing a loop conclusion. "
+            "Review the available identity, STP and MAC evidence; no port shutdown is justified by missing data."
+        ))
+    elif not active and not any(f.severity == "critical" for f in findings):
         actions.append(Action(
             "No loop found between managed switches. If the network is still down, the loop may be "
             "entirely inside one unmanaged switch or a cable between two wall ports on the same "

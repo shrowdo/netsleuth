@@ -21,6 +21,7 @@ from rich.console import Console
 console = Console()
 
 DEVICE_TYPES = [
+    "netgear_web",
     "auto", "cisco_ios", "cisco_xe", "cisco_nxos", "arista_eos", "hp_procurve",
     "aruba_aoscx", "juniper_junos", "huawei", "hp_comware",
     # Shorthands - try each variant on connect
@@ -64,6 +65,7 @@ def build_parser() -> argparse.ArgumentParser:
                         help=f"Seed switch type (default: auto). One of: {', '.join(DEVICE_TYPES)}. "
                              "Other switches are identified from CDP/LLDP.")
     parser.add_argument("--port", type=int, default=22, help="SSH port (default: 22)")
+    parser.add_argument("--proxy", help="HTTP/SOCKS proxy URL for netgear_web collection")
     parser.add_argument("--key-file", metavar="PATH", help="SSH private key file")
     parser.add_argument("--extra-creds", nargs="+", metavar="user:pass",
                         help="Fallback credentials tried in order when login fails")
@@ -180,6 +182,7 @@ def main():
                 workers=args.workers,
                 collect_counters=not args.no_counters,
                 raw_dir=raw_dir,
+                proxy_url=args.proxy,
             )
             with console.status("[cyan]Discovering switches...[/cyan]", spinner="line"):
                 result = run_scan(opts, log=log)
@@ -198,7 +201,7 @@ def main():
             console.print(f"[dim]Results written to {args.json}[/dim]")
 
         level, _ = result.verdict
-        sys.exit(1 if level == "critical" else 0)
+        sys.exit(1 if level == "critical" else (0 if result.coverage_complete else 2))
 
     except KeyboardInterrupt:
         console.print("\n[yellow]Cancelled.[/yellow]")

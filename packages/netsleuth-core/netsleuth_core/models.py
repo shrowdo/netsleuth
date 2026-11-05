@@ -42,3 +42,5 @@ class Device:
     error: str = ""
     # Other management IPs this switch was reached on.
     alt_ips: list[str] = field(default_factory=list)
+    collection_warnings: list[str] = field(default_factory=list)
+    evidence: dict = field(default_factory=dict)

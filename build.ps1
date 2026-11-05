@@ -10,6 +10,10 @@ if ($LASTEXITCODE -ne 0) { throw "Tests failed - not building." }
 
 $common = @(
     "--noconfirm", "--onefile",
+    "--paths", "$PSScriptRoot\packages\netsleuth-core",
+    "--paths", "$PSScriptRoot\packages\netsleuth-loopfinder",
+    "--paths", "$PSScriptRoot\packages\netsleuth",
+    "--hidden-import", "socks",
     "--collect-all", "netmiko", "--collect-all", "rich", "--collect-all", "networkx",
     "--collect-all", "textual", "--collect-all", "scapy",
     "--add-data", "$PSScriptRoot\packages\netsleuth-loopfinder\netsleuth_loopfinder\topologies;topologies",
